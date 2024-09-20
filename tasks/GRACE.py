@@ -4,7 +4,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
 from torch_geometric.nn import GCNConv
+from torch_geometric.utils import negative_sampling
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+import os
+from itertools import chain
 import argparse
 
 import sys
@@ -17,12 +20,7 @@ parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton"
 
 args = parser.parse_args()
 
-if args.dataset == "cotton":
-    from ShareMethod import DataLoad
-elif args.dataset == "wheat":
-    from wheat_dataloader import DataLoad
-elif args.dataset == "napus":
-    from napus_dataloader import DataLoad
+from CSGDN.utils import DataLoad
 
 # cuda / mps / cpu
 if torch.cuda.is_available():
@@ -32,61 +30,70 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
+args.device = device
+args.predictor = "2"
 
-percent_list = [30, 50, 60, 70, 80, 100]
-seed_list = [114, 514, 1919, 810, 721]
-lr = 0.01
-beta = 5e-4
-
+seed_list = [1482, 1111, 490, 510, 197]
+beta = 1e-2
 
 class Predictor(nn.Module):
     
-    def __init__(self, in_channels = 64):
+    def __init__(self, args):
         super().__init__()
 
-        # TODO add another methods ...
+        self.args = args
 
-        # 2-Linear MLP
-        self.predictor = nn.Sequential(nn.Linear(in_channels * 2, in_channels), 
+        if args.predictor == "1":
+            # 1-Linear MLP
+            self.predictor = nn.Linear(self.args.feature_dim * 2, 3).to(self.args.device)
+        elif args.predictor == "2":
+            # 2-Linear MLP
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
                                        nn.ReLU(), 
-                                       nn.Linear(in_channels, 1)).to(device)
-
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
+        elif args.predictor == "3":
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
+        elif args.predictor == "4":
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
 
     def forward(self, ux, vx):
         """link (u, v)"""
 
         x = torch.concat((ux, vx), dim=-1)
-        res = self.predictor(x).flatten()
+        # res = self.predictor(x).flatten()
+        res = self.predictor(x)
 
         return res
 
+
 class MyGRACE(nn.Module):
 
-    def __init__(self, x, in_channels = 32, out_channels = 32, layer_num = 2, tau = 0.5) -> None:
+    def __init__(self, args, layer_num = 2, tau = 0.5) -> None:
         super().__init__()
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.in_channels = args.feature_dim
+        self.out_channels = args.feature_dim
         self.layer_num = layer_num
         self.tau = tau
 
         # transforms
-        self.transforms = nn.Linear(2 * out_channels, out_channels).to(device)
+        self.transforms = nn.Linear(2 * self.out_channels, self.out_channels).to(device)
 
         # activation
         self.activation = nn.ReLU()
 
         # predict
-        self.predictor = Predictor(2 * out_channels)
-
-        # dimention reduce embedding
-        self.x = x
-        self.linear_DR = nn.Linear(self.x.shape[1], in_channels).to(device)
-
-
-    def dimension_reduction(self):
-        """DR the init feature to the target dimensions (self.in_channels)"""
-        return self.linear_DR(self.x)
+        self.predictor = Predictor(args)
 
     def encode(self, edge_index_a, edge_index_b, x):
 
@@ -109,6 +116,7 @@ class MyGRACE(nn.Module):
         view_a_pos, view_a_neg, view_b_pos, view_b_neg = edge_index
 
         pos_x_a, pos_x_b = self.encode(view_a_pos, view_b_pos, x)
+        """
         neg_x_a, neg_x_b = self.encode(view_a_neg, view_b_neg, x)
 
         x_a = torch.concat((pos_x_a, neg_x_a), dim=1)
@@ -118,6 +126,8 @@ class MyGRACE(nn.Module):
         x_b = self.activation(self.transforms(x_b))
 
         return x_a, x_b
+        """
+        return pos_x_a, pos_x_b
 
     def split_pos_neg(self, edge_index, edge_value):
 
@@ -159,8 +169,7 @@ class MyGRACE(nn.Module):
             / (refl_sim.sum(1) + between_sim.sum(1) - refl_sim.diag()))
 
     def label_loss(self, score, y):
-        pos_weight = torch.tensor([(y == 0).sum().item() / (y == 1).sum().item()] * y.shape[0]).to(device)
-        return F.binary_cross_entropy_with_logits(score, y, pos_weight=pos_weight)
+        return F.cross_entropy(score, y)
 
     def constrative_loss(self, x_a, x_b, mean=True):
         l1 = self.semi_loss(x_a, x_b)
@@ -168,18 +177,20 @@ class MyGRACE(nn.Module):
         return ((l1 + l2) * 0.5).mean() if mean else ((l1 + l2) * 0.5).sum()
 
     def predict(self, x_concat, src_id, dst_id):
+        x_concat = self.transforms(x_concat)
+        x_concat = F.normalize(x_concat)
+
         src_x = x_concat[src_id]
         dst_x = x_concat[dst_id]
 
-        return self.predictor(src_x, dst_x)
+        score = self.predictor(src_x, dst_x)
+
+        return F.softmax(score, dim=1)
 
     @torch.no_grad()
     def test(self, pred_y, y):
         pred = pred_y.cpu().numpy()
         test_y = y.cpu().numpy()
-
-        pred[pred >= 0] = 1
-        pred[pred < 0] = 0
 
         acc = accuracy_score(test_y, pred)
         auc = roc_auc_score(test_y, pred)
@@ -190,9 +201,10 @@ class MyGRACE(nn.Module):
         return acc, auc, f1, micro_f1, macro_f1
 
 
-def test(model, x_concat, test_pos_edge_index, test_neg_edge_index):
+def test(model, x, test_pos_edge_index, test_neg_edge_index):
 
     model.eval()
+
     with torch.no_grad():
 
         test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
@@ -200,12 +212,13 @@ def test(model, x_concat, test_pos_edge_index, test_neg_edge_index):
 
         y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
 
-        score_test = model.predict(x_concat, test_src_id, test_dst_id).to(device)
-        acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
-        # print()
-        print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
+        prob = model.predict(x, test_src_id, test_dst_id).to(device)
+        score_test = prob[:, (0, 2)].max(dim=1)[1]
 
-        return acc, auc, f1, micro_f1, macro_f1
+        acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
+
+    return acc, auc, f1, micro_f1, macro_f1
+
 
 def napus_test(grace_model, original_x, final_x, train_src_id, train_dst_id, test_pos_edge_index, test_neg_edge_index):
     grace_model.eval()
@@ -260,35 +273,50 @@ def napus_test(grace_model, original_x, final_x, train_src_id, train_dst_id, tes
 def train():
 
     # train
-    train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index = DataLoad(percent, times+1).load_data_format()
+    dataloader = DataLoad(args)
+    train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index, test_pos_edge_index, test_neg_edge_index = dataloader.load_data_format()
+
     node_num = torch.max(train_pos_edge_index).item()
-    x = DataLoad(percent, times+1).create_feature(node_num)
+    x = dataloader.create_feature(node_num)
     original_x = x.clone()
 
-    model = MyGRACE(x)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    args.feature_dim = 64
+    linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
+    model = MyGRACE(args)
+    optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.005, weight_decay=5e-4)
 
     # generate view
     view_a_pos, view_a_neg = model.generate_view(train_pos_edge_index, train_neg_edge_index)
     view_b_pos, view_b_neg = model.generate_view(train_pos_edge_index, train_neg_edge_index)
 
-    x_concat = None
+    edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=1).to(args.device)
+
+    best_acc, best_auc, best_f1, best_micro_f1, best_macro_f1 = 0, 0, 0, 0, 0
+    best_model = None
 
     for epoch in range(400):
 
-        x = model.dimension_reduction()
+        x = linear_DR(original_x)
 
         x_a, x_b = model((view_a_pos, view_a_neg, view_b_pos, view_b_neg), x)
 
-        x_concat = torch.concat((x_a, x_b), dim=1)
+        x = torch.concat((x_a, x_b), dim=1)
 
         # predict
-        src_id = torch.concat((train_pos_edge_index[0], train_neg_edge_index[0])).to(device)
-        dst_id = torch.concat((train_pos_edge_index[1], train_neg_edge_index[1])).to(device)
+        none_edge_index = negative_sampling(edge_index, x.size(0))
+        src_id = torch.concat((train_pos_edge_index[0], train_neg_edge_index[0], none_edge_index[0])).to(device)
+        dst_id = torch.concat((train_pos_edge_index[1], train_neg_edge_index[1], none_edge_index[1])).to(device)
 
-        y_train = torch.concat((torch.ones(train_pos_edge_index.shape[1]), torch.zeros(train_neg_edge_index.shape[1]))).to(device)
+        # pos: 001; neg: 100; none: 010
+        pos_y = torch.zeros(train_pos_edge_index.shape[1], 3).to(device)
+        pos_y[:, 2] = 1
+        neg_y = torch.zeros(train_neg_edge_index.shape[1], 3).to(device)
+        neg_y[:, 0] = 1
+        none_y = torch.zeros(none_edge_index.shape[1], 3).to(device)
+        none_y[:, 1] = 1
+        y_train = torch.concat((pos_y, neg_y, none_y))
 
-        score = model.predict(x_concat, src_id, dst_id)
+        score = model.predict(x, src_id, dst_id)
 
         con_loss = model.constrative_loss(x_a, x_b)
         label_loss = model.label_loss(score, y_train)
@@ -299,11 +327,23 @@ def train():
         loss.backward()
         optimizer.step()
 
+        acc, auc, f1, micro_f1, macro_f1 = test(model, x, val_pos_edge_index, val_neg_edge_index)
+
+        if best_auc + best_f1 < auc + f1:
+            best_acc, best_auc, best_f1, best_micro_f1, best_macro_f1 = acc, auc, f1, micro_f1, macro_f1
+            best_model = model
+
+        print(f"\rEpoch: {epoch+1:03d}, Loss: {loss:.4f}, ACC: {acc:.4f}, AUC: {auc:.4f}, F1: {f1:.4f}, Micro-F1: {micro_f1:.4f}, Macro-F1: {macro_f1:.4f}", end="", flush=True)
+
+    print(f"\nbest val acc: {best_acc:.4f}, auc: {best_auc:.4f}, f1: {best_f1:.4f}, micro_f1: {best_micro_f1:.4f}, macro_f1: {best_macro_f1:.4f}")
+
     # test
     if args.dataset == "napus":
-        acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, x_concat, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
+        acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
     else:
-        acc, auc, f1, micro_f1, macro_f1 = test(model, x_concat, test_pos_edge_index, test_neg_edge_index)
+        acc, auc, f1, micro_f1, macro_f1 = test(best_model, x, test_pos_edge_index, test_neg_edge_index)
+
+    print(f"test acc: {acc:.4f}, auc: {auc:.4f}, f1: {f1:.4f}, micro_f1: {micro_f1:.4f}, macro_f1: {macro_f1:.4f}")
 
     return acc, auc, f1, micro_f1, macro_f1
 
@@ -311,15 +351,27 @@ def train():
 res_str = []
 
 if __name__ == "__main__":
-    for percent in percent_list:
+
+    if not os.path.exists(f"./results/{args.dataset}/GRACE"):
+        os.makedirs(f"./results/{args.dataset}/GRACE")
+
+    # load period data
+    period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
+
+    for period_name in period:
+
+        args.period = period_name
+
         res = []
+
         for times in range(5):
-            # seed
-            seed = seed_list[times]
-            torch.random.manual_seed(seed)
-            torch_geometric.seed_everything(seed)
+
+            args.seed = seed_list[times]
+
+            torch.random.manual_seed(args.seed)
+            torch_geometric.seed_everything(args.seed)
             if torch.cuda.is_available():
-                torch.cuda.manual_seed(seed)
+                torch.cuda.manual_seed(args.seed)
 
             # train
             acc, auc, f1, micro_f1, macro_f1 = train()
@@ -330,8 +382,20 @@ if __name__ == "__main__":
         res = np.array(res)
         avg = res.mean(axis=0)
         std = res.std(axis=0)
-        res_str.append(f"percent {percent}: acc {avg[0]:.3f}+{std[0]:.3f}; auc {avg[1]:.3f}+{std[1]:.3f}; f1 {avg[2]:.3f}+{std[2]:.3f}; micro_f1 {avg[3]:.3f}+{std[3]:.3f}; macro_f1 {avg[4]:.3f}+{std[4]:.3f}\n")
+        print(avg)
+        print(std)
+        print()
 
-    for i in range(6):
-        print(f"percent {percent_list[i]}: {res_str[i]}")
-
+        with open(f"./results/{args.dataset}/GRACE/{period_name}_res.txt", "w") as f:
+            for line in res.tolist():
+                f.writelines(str(line))
+                f.writelines("\n")
+            f.writelines("\n")
+            f.write(f"acc: {avg[0]:.4f}±{std[0]:.4f}\n")
+            f.write(f"auc: {avg[1]:.4f}±{std[1]:.4f}\n")
+            f.write(f"f1: {avg[2]:.4f}±{std[2]:.4f}\n")
+            f.write(f"micro_f1: {avg[3]:.4f}±{std[3]:.4f}\n")
+            f.write(f"macro_f1: {avg[4]:.4f}±{std[4]:.4f}\n")
+            f.write("\n")
+    
+        break

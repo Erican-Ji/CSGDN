@@ -41,15 +41,15 @@ else:
 args.device = device
 
 # seed
-seed_list = [114, 514, 1919, 810, 721]
+seed_list = [1482, 1111, 490, 510, 197]
 seed = seed_list[args.times-1]
 args.seed = seed
 
 # =======================================================================================================================================
 
-grid = {"mask_ratio": np.array([0.4, 0.5, 0.6, 0.7, 0.8]), 
-        "alpha": np.array([0.6, 0.8]), 
-        "beta": np.array([1e-4])}
+grid = {"mask_ratio": np.array([0.2, 0.4, 0.6, 0.8]), 
+        "alpha": np.array([0.2, 0.4, 0.6, 0.8]),
+        "beta": np.array([1e-3, 1e-2, 1e-1])}
 
 res_str = []
 
@@ -65,16 +65,16 @@ def search(args):
         for alpha in grid.get("alpha"):
             for beta in grid.get("beta"):
 
-                print(f"mask_ratio: {mask_ratio}, alpha: {alpha}, beta: {beta}")
-
                 args.mask_ratio = mask_ratio
                 args.alpha = alpha
                 args.beta = beta
 
+                print(args)
+
                 res = []
                 for times in range(5):
                     # seed
-                    args.seed = seed_list[0]
+                    args.seed = seed_list[times]
                     args.times = times + 1
 
                     torch.random.manual_seed(args.seed)
@@ -99,11 +99,11 @@ def search(args):
                     best["tau"] = args.tau
                     best["predictor"] = args.predictor
                     best["feature_dim"] = args.feature_dim
-                    best["acc"] = acc
-                    best["auc"] = auc
-                    best["f1"] = f1
-                    best["micro_f1"] = micro_f1
-                    best["macro_f1"] = macro_f1
+                    best["acc"] = avg[0]
+                    best["auc"] = avg[1]
+                    best["f1"] = avg[2]
+                    best["micro_f1"] = avg[3]
+                    best["macro_f1"] = avg[4]
                     best["res"] = res_str
 
     return best
@@ -120,6 +120,8 @@ if __name__ == "__main__":
         best = search(args)
 
         print(best)
+
+        print(best.get("auc"))
 
         break
 

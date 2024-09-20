@@ -18,11 +18,11 @@ parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton"
                     help='choose dataset')
 parser.add_argument('--times', type=int, default=1,
                     help='Random seed. ( seed = seed_list[args.times] )')
-parser.add_argument('--mask_ratio', type=float, default=0.1,
+parser.add_argument('--mask_ratio', type=float, default=0.0,
                     help='random mask ratio')
 parser.add_argument('--tau', type=float, default=0.05,
                     help='temperature parameter')
-parser.add_argument('--beta', type=float, default=1e-4,
+parser.add_argument('--beta', type=float, default=1e-2,
                     help='control contribution of loss contrastive')
 parser.add_argument('--alpha', type=float, default=0.2,
                     help='control the contribution of inter and intra loss')
@@ -30,7 +30,7 @@ parser.add_argument('--lr', type=float, default=0.005,
                     help='Initial learning rate.')
 parser.add_argument('--feature_dim', type=int, default=64,
                     help='initial embedding size of node')
-parser.add_argument('--epochs', type=int, default=200,
+parser.add_argument('--epochs', type=int, default=400,
                     help='initial embedding size of node')
 parser.add_argument('--predictor', type=str, default="4", 
                     help='predictor method (1-4 Linear)')
@@ -49,7 +49,11 @@ else:
 args.device = device
 
 # seed
-seed_list = [114]
+# 11451
+# 41919
+# 81007
+# 21
+seed_list = [1482, 1111, 490, 510, 197]
 seed = seed_list[args.times-1]
 args.seed = seed
 
@@ -91,6 +95,7 @@ def test(model, test_pos_edge_index, test_neg_edge_index, see_prob=False):
     return acc, auc, f1, micro_f1, macro_f1
 
 def napus_test(csgdn_model, original_x, final_x, train_src_id, train_dst_id, test_pos_edge_index, test_neg_edge_index):
+
     csgdn_model.eval()
 
     # 合并 train_src_id, train_dst_id 并且去重
@@ -126,18 +131,15 @@ def napus_test(csgdn_model, original_x, final_x, train_src_id, train_dst_id, tes
     test_original_x = original_x[test_id]
     test_final_x = model(test_original_x)
     final_x[test_id] = test_final_x
-    print(test_original_x)
-    print(test_final_x)
+    # print(test_original_x)
+    # print(test_final_x)
 
     with torch.no_grad():
 
         y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
 
         # score_test = model.predict(model.x, test_src_id, test_dst_id).to(device)
-        if args.predictor == "dot":
-            score_test = csgdn_model.predict(final_x, test_src_id, test_dst_id).to(device)
-        else:
-            score_test = csgdn_model.predict(final_x, test_src_id, test_dst_id)[:, : 2].max(dim=1)[1]
+        score_test = csgdn_model.predict(final_x, test_src_id, test_dst_id)[:, (0, 2)].max(dim=1)[1]
 
         acc, auc, f1, micro_f1, macro_f1 = csgdn_model.test(score_test, y_test)
 
@@ -171,7 +173,7 @@ def train(args):
     # def model & optimizer
     model = CSGDN(args)
     optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=args.lr, weight_decay=5e-4)
-    scheduler = MultiStepLR(optimizer=optimizer, milestones=[70, 100, 130, 160], gamma=0.2)
+    # scheduler = MultiStepLR(optimizer=optimizer, milestones=[100], gamma=0.02)
 
     edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=1).to(args.device)
 
@@ -214,8 +216,14 @@ def train(args):
         none_y[:, 1] = 1
         y_train = torch.concat((pos_y, neg_y, none_y))
 
+        print(src_id, dst_id)
         score = model.predict(model.x, src_id, dst_id)
         # score = model.predict(model.x, src_id, dst_id)[:, : 2].max(dim=1)[1].to(torch.float)
+
+        torch.set_printoptions(profile="full")
+        print(y_train)
+        print(score)
+        torch.set_printoptions(profile="default")
 
         # compute label loss
         label_loss = model.compute_label_loss(score, y_train)
@@ -224,9 +232,12 @@ def train(args):
 
         loss.backward()
         optimizer.step()
-        scheduler.step()
+        # scheduler.step()
 
-        acc, auc, f1, micro_f1, macro_f1 = test(model, val_pos_edge_index, val_neg_edge_index)
+        if args.dataset == "napus":
+            acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, model.x, src_id, dst_id, val_pos_edge_index, val_neg_edge_index)
+        else:
+            acc, auc, f1, micro_f1, macro_f1 = test(model, val_pos_edge_index, val_neg_edge_index)
         print(f"\rtimes {args.times} epoch {epoch+1} done! loss {loss.item()} acc {acc}, auc {auc}, f1 {f1}", end="", flush=True)
 
         if auc + f1 > best_auc + best_f1:
@@ -237,15 +248,17 @@ def train(args):
 
     # test
     if args.dataset == "napus":
-        acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, model.x, src_id, dst_id, test_pos_edge_index, test_neg_edge_index)
+        acc, auc, f1, micro_f1, macro_f1 = napus_test(best_model, original_x, model.x, src_id, dst_id, test_pos_edge_index, test_neg_edge_index)
     else:
-        acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index, see_prob=True)
-        # acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index)
+        # acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index, see_prob=True)
+        acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index)
 
     return acc, auc, f1, micro_f1, macro_f1
 
 
-best = {"4DPA": {'mask_ratio': 0.5, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
+best = {"4DPA": {'mask_ratio': 0.5, 'alpha': 0.2, 'beta': 0.001, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
+# best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
+# best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16},  # GCN 751
             50: {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64}, 
             60: {'mask_ratio': 0.4, 'alpha': 0.2, 'beta': 1e-04, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
             70: {'mask_ratio': 0.1, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64}, 
@@ -264,12 +277,13 @@ if __name__ == "__main__":
     # load period data
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
 
-    for period_name in period:
+    for period_name in period[1: ]:
 
         res = []
         args.period = period_name
 
         # hyper params
+        """
         args.mask_ratio = best.get(args.period).get("mask_ratio")
         args.alpha = best.get(args.period).get("alpha")
         args.beta = best.get(args.period).get("beta")
@@ -277,13 +291,10 @@ if __name__ == "__main__":
         args.predictor = best.get(args.period).get("predictor")
         args.feature_dim = best.get(args.period).get("feature_dim")
         """
-        """
-
-        print(args)
 
         for times in range(5):
             # seed
-            args.seed = seed_list[0]
+            args.seed = seed_list[times]
             args.times = times + 1
 
             torch.random.manual_seed(args.seed)

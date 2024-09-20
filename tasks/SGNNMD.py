@@ -32,12 +32,9 @@ parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton"
 
 args = parser.parse_args()
 
-if args.dataset == "cotton":
-    from ShareMethod import DataLoad
-elif args.dataset == "wheat":
-    from wheat_dataloader import DataLoad
-elif args.dataset == "napus":
-    from napus_dataloader import DataLoad
+from CSGDN.utils import DataLoad
+
+args.device = device
 
 pheo_index_start = 0
 

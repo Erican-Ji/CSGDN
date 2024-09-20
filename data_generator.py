@@ -4,6 +4,8 @@ import torch
 import os
 import argparse
 from diffusion import Diffusion
+from torch_geometric.nn import SignedGCN
+from utils import DataLoad
 
 parser = argparse.ArgumentParser()
 
@@ -79,32 +81,50 @@ def generate_graph():
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_test.txt", test_data.cpu().numpy(), fmt='%d', delimiter='\t')
 
 
-def generate_feature():
+def generate_feature(period = "4DPA", feature_dim = 64):
 
     print("generating similarity adjacency matrix...")
 
-    gene_sim_data = pd.read_table(f"./data/{args.dataset}/ori_sim.txt", header=None, usecols=(0, 1, 2))
-    triad_data = []
-    for each in gene_sim_data.itertuples():
-        # the gene which our dataset does not contain
-        if not (gene2idx.get(each[1]) and gene2idx.get(each[2])):
-            continue
-        triad_data.append([gene2idx[each[1]], gene2idx[each[2]], each[3]])
+    if args.dataset == "cotton":
 
-    # TODO triad_data have a lot of duplicate data
-    triad_data = torch.tensor(triad_data).to(device)
+        # use the similarity matrix among genes 
 
-    N = len(gene2idx)
+        gene_sim_data = pd.read_table(f"./data/{args.dataset}/ori_sim.txt", header=None, usecols=(0, 1, 2))
+        triad_data = []
+        for each in gene_sim_data.itertuples():
+            # the gene which our dataset does not contain
+            if not (gene2idx.get(each[1]) and gene2idx.get(each[2])):
+                continue
+            triad_data.append([gene2idx[each[1]], gene2idx[each[2]], each[3]])
 
-    sim_adjmat = torch.ones((N, N))
+        # TODO triad_data have a lot of duplicate data
+        triad_data = torch.tensor(triad_data).to(device)
 
-    for sim_a, sim_b, sim_score in triad_data:
-        sim_a = int(sim_a)
-        sim_b = int(sim_b)
-        sim_adjmat[sim_a, sim_b] = sim_score / 100
-        sim_adjmat[sim_b, sim_a] = sim_score / 100
+        N = len(gene2idx)
 
-    np.savetxt(f"./data/{args.dataset}/{args.dataset}_feature.txt", sim_adjmat.cpu().numpy(), fmt='%.2f', delimiter='\t')
+        sim_adjmat = torch.ones((N, N))
+
+        for sim_a, sim_b, sim_score in triad_data:
+            sim_a = int(sim_a)
+            sim_b = int(sim_b)
+            sim_adjmat[sim_a, sim_b] = sim_score / 100
+            sim_adjmat[sim_b, sim_a] = sim_score / 100
+
+        np.savetxt(f"./data/{args.dataset}/{args.dataset}_feature.txt", sim_adjmat.cpu().numpy(), fmt='%.2f', delimiter='\t')
+
+    elif args.dataset == "napus":
+
+        # use the spectral feature
+
+        args.period = period
+        args.feature_dim = feature_dim
+
+        train_pos_edge_index, train_neg_edge_index, _, _, _, _ = DataLoad(args).load_data_format()
+        model = SignedGCN(args.feature_dim, args.feature_dim, num_layers=2, lamb=5).to(device)
+        x = model.create_spectral_features(train_pos_edge_index, train_neg_edge_index)
+
+        np.savetxt(f"./data/napus/{args.dataset}_{args.period}_feature.txt", x.cpu().numpy(), delimiter="\t", fmt="%.2f")
+        
 
 if __name__ == "__main__":
     # save the dict
@@ -116,7 +136,7 @@ if __name__ == "__main__":
 
     generate_graph()
 
-    generate_feature()
+    # generate_feature()
 
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
     for period_name in period:

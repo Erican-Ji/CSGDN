@@ -5,8 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn.conv import GATConv, GCNConv
 from torch_geometric.utils import negative_sampling
+from torch_geometric.utils import negative_sampling
 from torch_geometric import seed_everything
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+import os
+from itertools import chain
 import argparse
 
 import sys
@@ -19,12 +22,7 @@ parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton"
 
 args = parser.parse_args()
 
-if args.dataset == "cotton":
-    from ShareMethod import DataLoad
-elif args.dataset == "wheat":
-    from wheat_dataloader import DataLoad
-elif args.dataset == "napus":
-    from napus_dataloader import DataLoad
+from CSGDN.utils import DataLoad
 
 # cuda / mps / cpu
 if torch.cuda.is_available():
@@ -34,50 +32,65 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
+args.device = device
 
 class Predictor(nn.Module):
     
-    def __init__(self, in_channels = 64):
+    def __init__(self, args):
         super().__init__()
 
-        # TODO add another methods ...
+        self.args = args
 
-        # 2-Linear MLP
-        self.predictor = nn.Sequential(nn.Linear(in_channels * 2, in_channels), 
+        if args.predictor == "1":
+            # 1-Linear MLP
+            self.predictor = nn.Linear(self.args.feature_dim * 2, 3).to(self.args.device)
+        elif args.predictor == "2":
+            # 2-Linear MLP
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
                                        nn.ReLU(), 
-                                       nn.Linear(in_channels, 1)).to(device)
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
+        elif args.predictor == "3":
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
+        elif args.predictor == "4":
+            self.predictor = nn.Sequential(nn.Linear(self.args.feature_dim * 2, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, self.args.feature_dim), 
+                                       nn.ReLU(), 
+                                       nn.Linear(self.args.feature_dim, 3)).to(self.args.device)
 
     def forward(self, ux, vx):
         """link (u, v)"""
 
         x = torch.concat((ux, vx), dim=-1)
-        res = self.predictor(x).flatten()
+        # res = self.predictor(x).flatten()
+        res = self.predictor(x)
 
         return res
 
+
 class MySGCL(nn.Module):
-    def __init__(self, args, in_channels=32, out_channels=32, layer_num=2) -> None:
+    def __init__(self, args, layer_num=2) -> None:
         super().__init__()
         self.layer_num = layer_num
         
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.in_channels = args.feature_dim
+        self.out_channels = args.feature_dim
 
         self.args = args
 
         # transform
-        self.transform = nn.Linear(4 * out_channels, out_channels)
+        self.transform = nn.Linear(4 * self.out_channels, self.out_channels)
 
         # predictor
-        self.predictor = Predictor(out_channels).to(device)
+        self.predictor = Predictor(args).to(device)
 
         self.activation = nn.ReLU()
-
-        # dimension reduce embeddings
-        self.linear_DR = nn.Linear(args.x.shape[1], out_channels).to(device)
-
-    def dimension_reduction(self):
-        return self.linear_DR(self.args.x)
 
     def drop_edges(self, edge_index, ratio=0.8):
         assert(0 <= ratio and ratio <= 1)
@@ -205,21 +218,20 @@ class MySGCL(nn.Module):
         src_x = x_concat[src_id]
         dst_x = x_concat[dst_id]
 
-        return self.predictor(src_x, dst_x)
+        score = self.predictor(src_x, dst_x)
+
+        # return score
+        return F.softmax(score, dim=1)
 
     def compute_label_loss(self, score, y):
-        pos_weight = torch.tensor([(y == 0).sum().item() / (y == 1).sum().item()] * y.shape[0]).to(device)
-        return F.binary_cross_entropy_with_logits(score, y, pos_weight=pos_weight)
+        """label-loss"""
+        return F.cross_entropy(score, y)
 
     @torch.no_grad()
     def test(self, pred_y, y):
         """test method, return acc auc f1"""
         pred = pred_y.cpu().numpy()
         test_y = y.cpu().numpy()
-
-        # thresholds
-        pred[pred >= 0] = 1
-        pred[pred < 0] = 0
 
         acc = accuracy_score(test_y, pred)
         auc = roc_auc_score(test_y, pred)
@@ -229,24 +241,45 @@ class MySGCL(nn.Module):
 
         return acc, auc, f1, micro_f1, macro_f1
 
+def test(model, test_pos_edge_index, test_neg_edge_index):
 
-# percent_list = [30, 50, 60, 70, 80, 100]
-percent_list = [60]
-seed_list = [114, 514, 1919, 810, 721]
-lr = 0.005
-weight_decay = 5e-4
+    model.eval()
 
-args.alpha = 0.2
-args.beta = 0.0001
+    with torch.no_grad():
+
+        # test predict
+        test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
+        test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
+
+        y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
+
+        prob = model.predict(model.x, test_src_id, test_dst_id).to(device)
+        score_test = prob[:, (0, 2)].max(dim=1)[1]
+
+        acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
+
+    return acc, auc, f1, micro_f1, macro_f1
+
+
+seed_list = [1482, 1111, 490, 510, 197]
+args.lr = 0.005
+
+args.predictor = "2"
+args.alpha = 0.8
+args.beta = 0.01
 args.tau = 0.05
 args.aug_ratio = 0.1
 
+if not os.path.exists(f"./results/{args.dataset}/SGCL"):
+    os.makedirs(f"./results/{args.dataset}/SGCL")
 
-for percent in percent_list:
+# load period data
+period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
 
-    print(f"{percent} Start!")
+for period_name in period:
 
     res = []
+    args.period = period_name
 
     for times in range(5):
 
@@ -257,18 +290,25 @@ for percent in percent_list:
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
 
-        dataloader = DataLoad(percent, times+1)
-        train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index = dataloader.load_data_format()
+        dataloader = DataLoad(args)
+        train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index, test_pos_edge_index, test_neg_edge_index = dataloader.load_data_format()
         N = torch.max(train_pos_edge_index).item()
         x = dataloader.create_feature(N)
-        args.x = x
+        original_x = x.clone()
 
+        args.feature_dim = 64
+        linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MySGCL(args).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=args.lr, weight_decay=5e-4)
 
-        for epoch in range(1000):
+        edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=1).to(args.device)
 
-            x = model.dimension_reduction()
+        best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1 = 0, 0, 0, 0, 0
+        best_model = None
+
+        for epoch in range(500):
+
+            x = linear_DR(original_x)
 
             x_concat, *other_x = model(x, N, train_pos_edge_index, train_neg_edge_index)
 
@@ -276,10 +316,19 @@ for percent in percent_list:
             contrastive_loss = model.compute_contrastive_loss(x_concat, *other_x)
 
             # train predict
-            src_id = torch.concat((train_pos_edge_index[0], train_neg_edge_index[0])).to(device)
-            dst_id = torch.concat((train_pos_edge_index[1], train_neg_edge_index[1])).to(device)
+            none_edge_index = negative_sampling(edge_index, model.x.size(0))
 
-            y_train = torch.concat((torch.ones(train_pos_edge_index.shape[1]), torch.zeros(train_neg_edge_index.shape[1]))).to(device)
+            src_id = torch.concat((train_pos_edge_index[0], train_neg_edge_index[0], none_edge_index[0])).to(device)
+            dst_id = torch.concat((train_pos_edge_index[1], train_neg_edge_index[1], none_edge_index[1])).to(device)
+
+            # pos: 001; neg: 100; none: 010
+            pos_y = torch.zeros(train_pos_edge_index.shape[1], 3).to(device)
+            pos_y[:, 2] = 1
+            neg_y = torch.zeros(train_neg_edge_index.shape[1], 3).to(device)
+            neg_y[:, 0] = 1
+            none_y = torch.zeros(none_edge_index.shape[1], 3).to(device)
+            none_y[:, 1] = 1
+            y_train = torch.concat((pos_y, neg_y, none_y))
 
             score = model.predict(model.x, src_id, dst_id)
 
@@ -287,36 +336,45 @@ for percent in percent_list:
 
             loss = args.beta * contrastive_loss + label_loss
 
-            print(f"\repoch {epoch+1}: {loss}", end="", flush=True)
-
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
 
+            acc, auc, f1, micro_f1, macro_f1 = test(model, val_pos_edge_index, val_neg_edge_index)
+
+            if best_auc + best_f1 < auc + f1:
+                best_acc = acc
+                best_auc = auc
+                best_f1 = f1
+                best_micro_f1 = micro_f1
+                best_macro_f1 = macro_f1
+                best_model = model
+
+            print(f"\rEpoch {epoch+1:03d}, Loss: {loss:.4f}, ACC: {acc:.4f}, AUC: {auc:.4f}, F1: {f1:.4f}, Micro-F1: {micro_f1:.4f}, Macro-F1: {macro_f1:.4f}", end="", flush=True)
+
+        print(f"best val acc {best_acc:.6f}; auc {best_auc:.6f}; f1 {best_f1:.6f}; micro_f1 {best_micro_f1:.6f}; macro_f1 {best_macro_f1:.6f}")
+
         # test
-        print()
-        model.eval()
+        if args.dataset == "cotton":
+            acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index)
 
-        with torch.no_grad():
-            x_concat, *other_x = model(x, N, train_pos_edge_index, train_neg_edge_index)
-
-            # test predict
-            test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
-            test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
-
-            y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
-
-            score_test = model.predict(model.x, test_src_id, test_dst_id).to(device)
-
-            acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
-
-            print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
-
+        print(f"test acc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
 
         res.append((acc, auc, f1, micro_f1, macro_f1))
-        print(res[times])
 
     res = np.array(res)
     print(res.mean(axis=0))
     print(res.std(axis=0))
 
+    with open(f"./results/{args.dataset}/SGCL/{args.period}_res.txt", "w") as f:
+        for line in res:
+            f.write(f"{line}\n")
+        f.write(f"acc: {res.mean(axis=0)[0]:.4f}±{res.std(axis=0)[0]:.4f}\n")
+        f.write(f"auc: {res.mean(axis=0)[1]:.4f}±{res.std(axis=0)[1]:.4f}\n")
+        f.write(f"f1: {res.mean(axis=0)[2]:.4f}±{res.std(axis=0)[2]:.4f}\n")
+        f.write(f"micro_f1: {res.mean(axis=0)[3]:.4f}±{res.std(axis=0)[3]:.4f}\n")
+        f.write(f"macro_f1: {res.mean(axis=0)[4]:.4f}±{res.std(axis=0)[4]:.4f}\n")
+        f.write("\n")
+
+    break
+        

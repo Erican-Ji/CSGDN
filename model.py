@@ -33,18 +33,22 @@ class CSGDN(nn.Module):
         x_a, x_b = None, None
         for _ in range(self.layer_num):
 
-            # encoder = GATConv(self.in_channels, self.out_channels)
-            encoder = GCNConv(self.in_channels, self.out_channels).to(self.args.device)
+            encoder = GATConv(self.in_channels, self.out_channels).to(self.args.device)
+            # encoder = GCNConv(self.in_channels, self.out_channels).to(self.args.device)
 
             # for the graph a
-            # x_a = encoder(x.cpu(), edge_index_a.cpu())
-            x_a = encoder(x, edge_index_a).to(self.args.device)
-            x_a = self.activation(x_a).to(self.args.device)
+            for _ in range(2):
+                x_a = encoder(x, edge_index_a)
+                x_a = self.activation(x_a)
+            # x_a = encoder(x, edge_index_a).to(self.args.device)
+            # x_a = self.activation(x_a).to(self.args.device)
 
             # for the graph b
-            # x_b = encoder(x.cpu(), edge_index_b.cpu())
-            x_b = encoder(x, edge_index_b).to(self.args.device)
-            x_b = self.activation(x_b).to(self.args.device)
+            for _ in range(2):
+                x_b = encoder(x, edge_index_b)
+                x_b = self.activation(x_b)
+            # x_b = encoder(x, edge_index_b).to(self.args.device)
+            # x_b = self.activation(x_b).to(self.args.device)
 
         return x_a, x_b
 
@@ -169,9 +173,6 @@ class CSGDN(nn.Module):
         f1 = f1_score(test_y, pred)
         micro_f1 = f1_score(test_y, pred, average="micro")
         macro_f1 = f1_score(test_y, pred, average="macro")
-        """
-        f1 = micro_f1 = macro_f1 = 0
-        """
 
         return acc, auc, f1, micro_f1, macro_f1
 

@@ -34,11 +34,8 @@ args.device = device
 
 class MySignedGCN(SignedGCN):
 
-    def __init__(self, x, in_channels: int, hidden_channels: int, num_layers: int, lamb: float = 5, bias: bool = True):
-        super().__init__(in_channels, hidden_channels, num_layers, lamb, bias)
-
-        # dimension reduce embeddings
-        self.x = x
+    def __init__(self, args, num_layers: int, lamb: float = 5, bias: bool = True):
+        super().__init__(args.feature_dim, args.feature_dim, num_layers, lamb, bias)
     
     def test(
         self,
@@ -160,7 +157,7 @@ plt.show()
 
 # percent_list = [30, 50, 60, 70, 80, 100]
 percent_list = [60]
-seed_list = [1145]
+seed_list = [114]
 
 if not os.path.exists(f"./results/{args.dataset}/SGCN"):
     os.makedirs(f"./results/{args.dataset}/SGCN")
@@ -194,14 +191,15 @@ for period_name in period:
         original_x = x.clone()
 
         # Build and train model
-        linear_DR = nn.Linear(x.shape[1], 32).to(device)
-        model = MySignedGCN(x, 32, 32, num_layers=2, lamb=5).to(device)
+        args.feature_dim = 64
+        linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
+        model = MySignedGCN(args, num_layers=2, lamb=5).to(device)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.01, weight_decay=5e-4)
 
         best_acc, best_auc, best_f1, best_micro_f1, best_macro_f1 = 0, 0, 0, 0, 0
         best_model = None
 
-        for epoch in range(200):
+        for epoch in range(500):
             x = linear_DR(original_x)
             loss = train(model, optimizer, x, train_pos_edge_index, train_neg_edge_index)
             # print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}')
@@ -216,7 +214,7 @@ for period_name in period:
 
         if args.dataset == "napus":
             acc, auc, f1, micro_f1, macro_f1 = napus_test(model, x, original_x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
-        else:
+        elif args.dataset == "cotton":
             acc, auc, f1, micro_f1, macro_f1 = test(best_model, x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
 
         print(f"test acc: {acc:.4f}, auc: {auc:.4f}, f1: {f1:.4f}, micro_f1: {micro_f1:.4f}, macro_f1: {macro_f1:.4f}")
