@@ -57,25 +57,60 @@ seed_list = [1482, 1111, 490, 510, 197]
 seed = seed_list[args.times-1]
 args.seed = seed
 
-def test(model, test_pos_edge_index, test_neg_edge_index, see_prob=False):
+def test(model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=False):
 
     model.eval()
 
+    edge_idx = torch.concat([train_pos_edge_index, train_neg_edge_index], dim=1).unique().to(device)
+
+    # mapping model: map the original feature to the final feature
+    mapping_model = nn.Sequential(nn.Linear(model.x.shape[1], model.x.shape[1]),
+                                  nn.ReLU(),
+                                  nn.Linear(model.x.shape[1], model.x.shape[1])).to(device)
+    mapping_loss = nn.MSELoss()
+    mapping_optimizer = torch.optim.Adam(mapping_model.parameters(), lr=0.01, weight_decay=5e-4)
+
+    x_original = model.x[edge_idx].detach()
+    
+    for epoch in range(50):
+        mapping_model.train()
+        mapping_optimizer.zero_grad()
+        x_hat = mapping_model(x_original)
+        loss = mapping_loss(x_hat, x_original)
+        loss.backward()
+        mapping_optimizer.step()
+        # print(f"\rmapping epoch {epoch+1} done: loss {loss}", end="", flush=True)
+
+    mapping_model.eval()
+
     with torch.no_grad():
 
-        # test predict
-        test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
-        test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
+        # original feature to final feature
+        test_edge_idx = torch.concat([test_pos_edge_index, test_neg_edge_index], dim=1).unique().to(device)
+        model.x[test_edge_idx] = mapping_model(model.x[test_edge_idx])
 
-        y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
+        pos_log_prob = model.predict(model.x, test_pos_edge_index)
+        pos_score = pos_log_prob[:, :2].max(dim=1)[1]
+        neg_log_prob = model.predict(model.x, test_neg_edge_index)
+        neg_score = neg_log_prob[:, :2].max(dim=1)[1]
+        score_test = (1 - torch.cat([pos_score, neg_score]))
 
-        prob = model.predict(model.x, test_src_id, test_dst_id).to(device)
-        score_test = prob[:, (0, 2)].max(dim=1)[1]
+        y_test = torch.cat(
+            [score_test.new_ones((pos_score.size(0))),
+             score_test.new_zeros(neg_score.size(0))])
 
         acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
 
         # print the original gene name
         if args.dataset == "cotton" and see_prob:
+
+            # test predict
+            test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
+            test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
+            
+            pos_prob = torch.exp(pos_log_prob)
+            neg_prob = torch.exp(neg_log_prob)
+            prob = torch.concat([neg_prob, pos_prob], dim=1)
             # back to gene name
             gene2idx, idx2gene = DataLoad(args).load_backup_dict()
 
@@ -87,63 +122,8 @@ def test(model, test_pos_edge_index, test_neg_edge_index, see_prob=False):
             test_src_geneId = [idx2gene.get(i) for i in test_src_id]
             test_dst_geneId = [idx2gene.get(i) for i in test_dst_id]
 
-            df = pd.DataFrame({"src": test_src_geneId, "dst": test_dst_geneId, "true": y_test, "predict": score_test, "neg_prob": prob[:, 0].cpu().numpy(), "none_prob": prob[:, 1].cpu().numpy(), "pos_prob": prob[:, 2].cpu().numpy()})
+            df = pd.DataFrame({"src": test_src_geneId, "dst": test_dst_geneId, "true": y_test, "predict": score_test, "neg_prob": prob[:, 1].cpu().numpy(), "none_prob": prob[:, 2].cpu().numpy(), "pos_prob": prob[:, 0].cpu().numpy()})
             df.to_csv(f"./results/{args.dataset}/CSGDN/{args.period}_{args.times}.csv", index=False)
-
-        # print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
-
-    return acc, auc, f1, micro_f1, macro_f1
-
-def napus_test(csgdn_model, original_x, final_x, train_src_id, train_dst_id, test_pos_edge_index, test_neg_edge_index):
-
-    csgdn_model.eval()
-
-    # 合并 train_src_id, train_dst_id 并且去重
-    train_id = torch.concat((train_src_id, train_dst_id)).unique()
-    train_original_x = original_x[train_id]
-    train_final_x = final_x[train_id]
-
-    # 通过 oringal_x 学习一个多层感知机映射到 final_x
-    model = nn.Sequential(nn.Linear(original_x.shape[1], final_x.shape[1]), 
-                          nn.ReLU(),
-                          nn.Linear(final_x.shape[1], final_x.shape[1])).to(device)
-
-    Loss = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-    
-    for epoch in range(400):
-        model.train()
-        optimizer.zero_grad()
-        x_hat = model(train_original_x)
-        loss = Loss(x_hat, train_final_x.detach())
-        loss.backward()
-        optimizer.step()
-        print(f"\rmapping epoch {epoch+1} done", end="", flush=True)
-
-    print(loss)
-
-    model.eval()
-
-    # 将 test_pos_edge_index, test_neg_edge_index 中对应在 original 中的 test_original_x 映射到 final_x
-    test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
-    test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
-    test_id = torch.concat((test_src_id, test_dst_id)).unique()
-    test_original_x = original_x[test_id]
-    test_final_x = model(test_original_x)
-    final_x[test_id] = test_final_x
-    # print(test_original_x)
-    # print(test_final_x)
-
-    with torch.no_grad():
-
-        y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
-
-        # score_test = model.predict(model.x, test_src_id, test_dst_id).to(device)
-        score_test = csgdn_model.predict(final_x, test_src_id, test_dst_id)[:, (0, 2)].max(dim=1)[1]
-
-        acc, auc, f1, micro_f1, macro_f1 = csgdn_model.test(score_test, y_test)
-
-        return acc, auc, f1, micro_f1, macro_f1
 
         # print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
 
@@ -197,46 +177,13 @@ def train(args):
         x_concat = torch.concat((train_pos_x_a, train_pos_x_b, diff_pos_x_a, diff_pos_x_b, 
                                 train_neg_x_a, train_neg_x_b, diff_neg_x_a, diff_neg_x_b), dim=1)
 
-        # compute contrastive loss
-        contrastive_loss = model.compute_contrastive_loss(x_concat, train_pos_x_a, train_pos_x_b, train_neg_x_a, train_neg_x_b, diff_pos_x_a, diff_pos_x_b, diff_neg_x_a, diff_neg_x_b)
-
-        # predict
-        # sample the none edges ( src -> dst 0 )
-        none_edge_index = negative_sampling(edge_index, model.x.size(0))
-
-        src_id = torch.concat((train_pos_edge_index[0], train_neg_edge_index[0], none_edge_index[0])).to(device)
-        dst_id = torch.concat((train_pos_edge_index[1], train_neg_edge_index[1], none_edge_index[1])).to(device)
-
-        # pos: 001; neg: 100; none: 010
-        pos_y = torch.zeros(train_pos_edge_index.shape[1], 3).to(device)
-        pos_y[:, 2] = 1
-        neg_y = torch.zeros(train_neg_edge_index.shape[1], 3).to(device)
-        neg_y[:, 0] = 1
-        none_y = torch.zeros(none_edge_index.shape[1], 3).to(device)
-        none_y[:, 1] = 1
-        y_train = torch.concat((pos_y, neg_y, none_y))
-
-        score = model.predict(model.x, src_id, dst_id)
-        # score = model.predict(model.x, src_id, dst_id)[:, : 2].max(dim=1)[1].to(torch.float)
-
-        # torch.set_printoptions(profile="full")
-        # print(y_train)
-        # print(score)
-        # torch.set_printoptions(profile="default")
-
-        # compute label loss
-        label_loss = model.compute_label_loss(score, y_train)
-
-        loss = args.beta * contrastive_loss + (1 - args.beta) * label_loss
+        loss = model.loss(x_concat, train_pos_x_a, train_pos_x_b, train_neg_x_a, train_neg_x_b, diff_pos_x_a, diff_pos_x_b, diff_neg_x_a, diff_neg_x_b, train_pos_edge_index, train_neg_edge_index)
 
         loss.backward()
         optimizer.step()
         # scheduler.step()
 
-        if args.dataset == "anapus":
-            acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, model.x, src_id, dst_id, val_pos_edge_index, val_neg_edge_index)
-        else:
-            acc, auc, f1, micro_f1, macro_f1 = test(model, val_pos_edge_index, val_neg_edge_index)
+        acc, auc, f1, micro_f1, macro_f1 = test(model, train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index)
         print(f"\rtimes {args.times} epoch {epoch+1} done! loss {loss.item()} acc {acc}, auc {auc}, f1 {f1}", end="", flush=True)
 
         if auc + f1 > best_auc + best_f1:
@@ -246,17 +193,13 @@ def train(args):
     print(f"\nbest val acc {best_acc} auc {best_auc}, best f1 {best_f1}, micro_f1 {best_mricro_f1}, macro_f1 {best_macro_f1}")
 
     # test
-    if args.dataset == "anapus":
-        acc, auc, f1, micro_f1, macro_f1 = napus_test(best_model, original_x, model.x, src_id, dst_id, test_pos_edge_index, test_neg_edge_index)
-    else:
-        # acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index, see_prob=True)
-        acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index)
+    acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
 
     return acc, auc, f1, micro_f1, macro_f1
 
 
-# best = {"4DPA": {'mask_ratio': 0.5, 'alpha': 0.2, 'beta': 0.001, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
-best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
+best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
+# best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
 # best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16},  # GCN 751
             50: {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64}, 
             60: {'mask_ratio': 0.4, 'alpha': 0.2, 'beta': 1e-04, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
@@ -282,13 +225,13 @@ if __name__ == "__main__":
         args.period = period_name
 
         # hyper params
-        """
         args.mask_ratio = best.get(args.period).get("mask_ratio")
         args.alpha = best.get(args.period).get("alpha")
         args.beta = best.get(args.period).get("beta")
         args.tau = best.get(args.period).get("tau")
         args.predictor = best.get(args.period).get("predictor")
         args.feature_dim = best.get(args.period).get("feature_dim")
+        """
         """
 
         for times in range(5):

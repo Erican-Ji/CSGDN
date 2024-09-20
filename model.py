@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.utils import negative_sampling
 from torch_geometric.nn import GCNConv, GATConv
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
 
@@ -146,20 +147,45 @@ class CSGDN(nn.Module):
         return (1 - self.args.alpha) * inter_loss + self.args.alpha * intra_loss
 
 
-    def predict(self, x, src_id, dst_id):
+    def predict(self, x, edge_index):
         """predict training dataset"""
-        src_x = x[src_id]
-        dst_x = x[dst_id]
+        score = self.predictor(x[edge_index[0]], x[edge_index[1]])
 
-        score = self.predictor(src_x, dst_x)
-
-        # return score
-        return F.softmax(score, dim=1)
+        # return F.softmax(score, dim=1)
+        return torch.log_softmax(score, dim=1)
 
 
-    def compute_label_loss(self, score, y):
+    def compute_label_loss(self, x, train_pos_edge_index, train_neg_edge_index):
         """label-loss"""
-        return F.cross_entropy(score, y)
+        edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=1).to(self.args.device)
+        none_edge_index = negative_sampling(edge_index, x.size(0))
+
+        pos_score = self.predict(x, train_pos_edge_index)
+        neg_score = self.predict(x, train_neg_edge_index)
+        none_score = self.predict(x, none_edge_index)
+
+        nll_loss = 0
+        nll_loss += F.nll_loss(
+            pos_score,
+            train_pos_edge_index.new_full((train_pos_edge_index.size(1), ), 0))
+        nll_loss += F.nll_loss(
+            neg_score,
+            train_neg_edge_index.new_full((train_neg_edge_index.size(1), ), 1))
+        nll_loss += F.nll_loss(
+            none_score,
+            none_edge_index.new_full((none_edge_index.size(1), ), 2))
+
+        return nll_loss / 3.0
+    
+    def loss(self, x, train_pos_x_a, train_pos_x_b, train_neg_x_a, train_neg_x_b, diff_pos_x_a, diff_pos_x_b, diff_neg_x_a, diff_neg_x_b, train_pos_edge_index_a, train_neg_edge_index_a):
+        """loss function"""
+        # contrastive loss
+        contrastive_loss = self.compute_contrastive_loss(x, train_pos_x_a, train_pos_x_b, train_neg_x_a, train_neg_x_b, diff_pos_x_a, diff_pos_x_b, diff_neg_x_a, diff_neg_x_b)
+
+        # label loss
+        label_loss = self.compute_label_loss(self.x, train_pos_edge_index_a, train_neg_edge_index_a)
+
+        return self.args.beta * contrastive_loss + (1 - self.args.beta) * label_loss
 
 
     @torch.no_grad()
