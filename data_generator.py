@@ -41,22 +41,33 @@ gene_name = dataset["GeneID"].unique()  # for all stage gene
 idx2gene = {idx: gene for idx, gene in enumerate(gene_name)}
 gene2idx = {gene: idx for idx, gene in enumerate(gene_name)}
 max_gene_idx = max(idx2gene.keys())
-for idx, pheo in enumerate(pheo_name):
-    idx2gene[idx+max_gene_idx+1] = pheo
-    gene2idx[pheo] = idx+max_gene_idx+1
+if args.dataset == "cotton":
+    for idx, pheo in enumerate(pheo_name):
+        idx2gene[idx+max_gene_idx+1] = pheo
+        gene2idx[pheo] = idx+max_gene_idx+1
+elif args.dataset == "napus":
+    for idx, pheo in enumerate(period):  # different period of SOC are seen as different pheo
+        idx2gene[idx+max_gene_idx+1] = pheo
+        gene2idx[pheo] = idx+max_gene_idx+1
 
 def generate_graph():
 
     for period_name in period:
 
         # find all index of current preiod ( e.g 4PDA )
-        cur_period_index = dataset["Stage"] == period_name
-
-        # extract current period dataset
-        cur_period_dataset = dataset[cur_period_index].iloc[:, [0, 2, 3]]
+        if args.dataset == "cotton":
+            cur_period_index = dataset["Stage"] == period_name
+            # extract current period dataset
+            cur_period_dataset = dataset[cur_period_index].iloc[:, [0, 2, 3]]
+        elif args.dataset == "napus":
+            cur_period_index = dataset["Phenotype"] == "SOC"
+            cur_period_dataset = dataset[cur_period_index].iloc[:, [1, 2, 3]]
 
         # reindex
-        cur_period_dataset["Phenotype"] = cur_period_dataset["Phenotype"].map(gene2idx)
+        if args.dataset == "cotton":
+            cur_period_dataset["Phenotype"] = cur_period_dataset["Phenotype"].map(gene2idx)
+        elif args.dataset == "napus":
+            cur_period_dataset["Stage"] = cur_period_dataset["Stage"].map(gene2idx)
         cur_period_dataset["GeneID"] = cur_period_dataset["GeneID"].map(gene2idx)
 
         # to tensor
@@ -75,6 +86,22 @@ def generate_graph():
         train_data = data[: int(data.size(0)*0.7)]
         val_data = data[int(data.size(0)*0.7): int(data.size(0)*0.8)]
         test_data = data[int(data.size(0)*0.8):]
+
+        """
+        # remove the node which does not appear in the train data
+        visited_dict = {node: 1 for node in train_data[:, 0]}
+        
+        val_mask = torch.tensor([True if visited_dict.get(node) else False for node in val_data[:, 0]])
+        test_mask = torch.tensor([True if visited_dict.get(node) else False for node in test_data[:, 0]])
+
+        train_data = torch.concat((train_data, val_data[~val_mask], test_data[~test_mask]), dim=0)
+        test_data = test_data[test_mask]
+
+        # resize the val and test data, val:test = 1:2
+        val_test = torch.concat((val_data, test_data), dim=0)
+        val_data = val_test[: int(val_test.size(0)*0.3)]
+        test_data = val_test[int(val_test.size(0)*0.3):]
+        """
 
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_training.txt", train_data.cpu().numpy(), fmt='%d', delimiter='\t')
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_validation.txt", val_data.cpu().numpy(), fmt='%d', delimiter='\t')

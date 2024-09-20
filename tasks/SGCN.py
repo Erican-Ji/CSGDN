@@ -212,7 +212,7 @@ for period_name in period:
 
         print(f"\nbest val acc: {best_acc:.4f}, auc: {best_auc:.4f}, f1: {best_f1:.4f}, micro_f1: {best_micro_f1:.4f}, macro_f1: {best_macro_f1:.4f}")
 
-        if args.dataset == "napus":
+        if args.dataset == "anapus":
             acc, auc, f1, micro_f1, macro_f1 = napus_test(model, x, original_x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
         elif args.dataset == "cotton":
             acc, auc, f1, micro_f1, macro_f1 = test(best_model, x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)

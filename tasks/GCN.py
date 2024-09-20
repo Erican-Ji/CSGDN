@@ -190,7 +190,7 @@ for period_name in period:
         best_acc, best_auc, best_f1, best_micro_f1, best_macro_f1 = 0, 0, 0, 0, 0
         best_model = None
 
-        for epoch in range(500):
+        for epoch in range(800):
 
             x = linear_DR(original_x)
 

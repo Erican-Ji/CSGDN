@@ -18,13 +18,13 @@ parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton"
                     help='choose dataset')
 parser.add_argument('--times', type=int, default=1,
                     help='Random seed. ( seed = seed_list[args.times] )')
-parser.add_argument('--mask_ratio', type=float, default=0.0,
+parser.add_argument('--mask_ratio', type=float, default=0.4,
                     help='random mask ratio')
 parser.add_argument('--tau', type=float, default=0.05,
                     help='temperature parameter')
-parser.add_argument('--beta', type=float, default=1e-2,
+parser.add_argument('--beta', type=float, default=0.01,
                     help='control contribution of loss contrastive')
-parser.add_argument('--alpha', type=float, default=0.2,
+parser.add_argument('--alpha', type=float, default=0.8,
                     help='control the contribution of inter and intra loss')
 parser.add_argument('--lr', type=float, default=0.005,
                     help='Initial learning rate.')
@@ -32,7 +32,7 @@ parser.add_argument('--feature_dim', type=int, default=64,
                     help='initial embedding size of node')
 parser.add_argument('--epochs', type=int, default=400,
                     help='initial embedding size of node')
-parser.add_argument('--predictor', type=str, default="4", 
+parser.add_argument('--predictor', type=str, default="2", 
                     help='predictor method (1-4 Linear)')
 parser.add_argument('--ablation', action="store_true",)
 
@@ -216,14 +216,13 @@ def train(args):
         none_y[:, 1] = 1
         y_train = torch.concat((pos_y, neg_y, none_y))
 
-        print(src_id, dst_id)
         score = model.predict(model.x, src_id, dst_id)
         # score = model.predict(model.x, src_id, dst_id)[:, : 2].max(dim=1)[1].to(torch.float)
 
-        torch.set_printoptions(profile="full")
-        print(y_train)
-        print(score)
-        torch.set_printoptions(profile="default")
+        # torch.set_printoptions(profile="full")
+        # print(y_train)
+        # print(score)
+        # torch.set_printoptions(profile="default")
 
         # compute label loss
         label_loss = model.compute_label_loss(score, y_train)
@@ -234,7 +233,7 @@ def train(args):
         optimizer.step()
         # scheduler.step()
 
-        if args.dataset == "napus":
+        if args.dataset == "anapus":
             acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, model.x, src_id, dst_id, val_pos_edge_index, val_neg_edge_index)
         else:
             acc, auc, f1, micro_f1, macro_f1 = test(model, val_pos_edge_index, val_neg_edge_index)
@@ -247,7 +246,7 @@ def train(args):
     print(f"\nbest val acc {best_acc} auc {best_auc}, best f1 {best_f1}, micro_f1 {best_mricro_f1}, macro_f1 {best_macro_f1}")
 
     # test
-    if args.dataset == "napus":
+    if args.dataset == "anapus":
         acc, auc, f1, micro_f1, macro_f1 = napus_test(best_model, original_x, model.x, src_id, dst_id, test_pos_edge_index, test_neg_edge_index)
     else:
         # acc, auc, f1, micro_f1, macro_f1 = test(best_model, test_pos_edge_index, test_neg_edge_index, see_prob=True)
@@ -256,8 +255,8 @@ def train(args):
     return acc, auc, f1, micro_f1, macro_f1
 
 
-best = {"4DPA": {'mask_ratio': 0.5, 'alpha': 0.2, 'beta': 0.001, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
-# best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
+# best = {"4DPA": {'mask_ratio': 0.5, 'alpha': 0.2, 'beta': 0.001, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
+best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
 # best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16},  # GCN 751
             50: {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64}, 
             60: {'mask_ratio': 0.4, 'alpha': 0.2, 'beta': 1e-04, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
@@ -277,7 +276,7 @@ if __name__ == "__main__":
     # load period data
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
 
-    for period_name in period[1: ]:
+    for period_name in period:
 
         res = []
         args.period = period_name
@@ -315,13 +314,13 @@ if __name__ == "__main__":
         std = res.std(axis=0)
         res_str.append(f"Stage {args.period}: acc {avg[0]:.3f}+{std[0]:.3f}; auc {avg[1]:.3f}+{std[1]:.3f}; f1 {avg[2]:.3f}+{std[2]:.3f}; micro_f1 {avg[3]:.3f}+{std[3]:.3f}; macro_f1 {avg[4]:.3f}+{std[4]:.3f}\n")
 
+        """
         with open(f"./results/{args.dataset}/CSGDN/{args.period}_res.txt", "w") as f:
             for line in res.tolist():
                 f.writelines(str(line))
                 f.writelines("\n")
             f.writelines("\n")
             f.writelines(res_str[-1])
-        """
         """
 
         break
