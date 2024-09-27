@@ -168,9 +168,11 @@ class CSGDN(nn.Module):
         nll_loss += F.nll_loss(
             pos_score,
             train_pos_edge_index.new_full((train_pos_edge_index.size(1), ), 0))
-        nll_loss += F.nll_loss(
+        # nll_loss += F.nll_loss(
+        nll_loss += 3 * F.nll_loss(
             neg_score,
             train_neg_edge_index.new_full((train_neg_edge_index.size(1), ), 1))
+        # nll_loss += 0.03 * F.nll_loss(
         nll_loss += F.nll_loss(
             none_score,
             none_edge_index.new_full((none_edge_index.size(1), ), 2))

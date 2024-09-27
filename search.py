@@ -6,7 +6,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"],
                     help='choose dataset')
 parser.add_argument('--times', type=int, default=1,
                     help='Random seed. ( seed = seed_list[args.times] )')

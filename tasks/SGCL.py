@@ -17,7 +17,7 @@ sys.path.append("..")
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 
 args = parser.parse_args()
@@ -262,13 +262,20 @@ def test(model, test_pos_edge_index, test_neg_edge_index):
 
 
 seed_list = [1482, 1111, 490, 510, 197]
-args.lr = 0.005
+args.lr = 0.001
 
-args.predictor = "2"
-args.alpha = 0.8
-args.beta = 0.01
-args.tau = 0.05
-args.aug_ratio = 0.1
+if args.dataset == "cotton":
+    args.predictor = "2"  # cotton
+    args.alpha = 0.8
+    args.beta = 0.01
+    args.tau = 0.05
+    args.aug_ratio = 0.4
+elif args.dataset == "napus":
+    args.predictor = "1"  # napus
+    args.alpha = 0.2
+    args.beta = 0.1
+    args.tau = 0.05
+    args.aug_ratio = 0.8
 
 if not os.path.exists(f"./results/{args.dataset}/SGCL"):
     os.makedirs(f"./results/{args.dataset}/SGCL")
@@ -296,7 +303,10 @@ for period_name in period:
         x = dataloader.create_feature(N)
         original_x = x.clone()
 
-        args.feature_dim = 64
+        if args.dataset == "cotton":
+            args.feature_dim = 64  # cotton
+        elif args.dataset == "napus":
+            args.feature_dim = 32  # napus
         linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MySGCL(args).to(device)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=args.lr, weight_decay=5e-4)
@@ -331,6 +341,7 @@ for period_name in period:
             y_train = torch.concat((pos_y, neg_y, none_y))
 
             score = model.predict(model.x, src_id, dst_id)
+            # score = prob.max(dim=1)[1].float().reshape(-1, 1)
 
             label_loss = model.compute_label_loss(score, y_train)
 
@@ -352,7 +363,7 @@ for period_name in period:
 
             print(f"\rEpoch {epoch+1:03d}, Loss: {loss:.4f}, ACC: {acc:.4f}, AUC: {auc:.4f}, F1: {f1:.4f}, Micro-F1: {micro_f1:.4f}, Macro-F1: {macro_f1:.4f}", end="", flush=True)
 
-        print(f"best val acc {best_acc:.6f}; auc {best_auc:.6f}; f1 {best_f1:.6f}; micro_f1 {best_micro_f1:.6f}; macro_f1 {best_macro_f1:.6f}")
+        print(f"\nbest val acc {best_acc:.6f}; auc {best_auc:.6f}; f1 {best_f1:.6f}; micro_f1 {best_micro_f1:.6f}; macro_f1 {best_macro_f1:.6f}")
 
         # test
         if args.dataset == "cotton":
@@ -375,6 +386,7 @@ for period_name in period:
         f.write(f"micro_f1: {res.mean(axis=0)[3]:.4f}±{res.std(axis=0)[3]:.4f}\n")
         f.write(f"macro_f1: {res.mean(axis=0)[4]:.4f}±{res.std(axis=0)[4]:.4f}\n")
         f.write("\n")
+    """
+    """
 
     break
-        

@@ -15,7 +15,7 @@ sys.path.append("..")
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 
 args = parser.parse_args()
@@ -31,10 +31,20 @@ else:
     device = torch.device("cpu")
 
 args.device = device
-args.predictor = "2"
+if args.dataset == "cotton":
+    args.predictor = "2"  # cotton
+    beta = 1e-2
+    args.mask_ratio = 0.4
+elif args.dataset == "napus":
+    args.predictor = "1"  # napus
+    beta = 0.1
+    args.mask_ratio = 0.8
+elif args.dataset == "cotton_80":
+    args.predictor = "2"  # cotton
+    beta = 1e-2
+    args.mask_ratio = 0.4
 
 seed_list = [1482, 1111, 490, 510, 197]
-beta = 1e-2
 
 class Predictor(nn.Module):
     
@@ -78,7 +88,7 @@ class Predictor(nn.Module):
 
 class MyGRACE(nn.Module):
 
-    def __init__(self, args, layer_num = 2, tau = 0.5) -> None:
+    def __init__(self, args, layer_num = 2, tau = 0.05) -> None:
         super().__init__()
 
         self.in_channels = args.feature_dim
@@ -152,7 +162,7 @@ class MyGRACE(nn.Module):
         pos_num = train_pos_edge_index.shape[1]
         neg_num = train_neg_edge_index.shape[1]
 
-        return self.split_pos_neg(*self.remove_edges(torch.concat((train_pos_edge_index, train_neg_edge_index), dim=1), torch.concat((torch.ones(pos_num), torch.zeros(neg_num)))))
+        return self.split_pos_neg(*self.remove_edges(torch.concat((train_pos_edge_index, train_neg_edge_index), dim=1), torch.concat((torch.ones(pos_num), torch.zeros(neg_num))), mask_ratio = args.mask_ratio))
 
     def sim(self, x_a: torch.Tensor, x_b: torch.Tensor):
         x_a = F.normalize(x_a)
@@ -219,57 +229,6 @@ def test(model, x, test_pos_edge_index, test_neg_edge_index):
 
     return acc, auc, f1, micro_f1, macro_f1
 
-
-def napus_test(grace_model, original_x, final_x, train_src_id, train_dst_id, test_pos_edge_index, test_neg_edge_index):
-    grace_model.eval()
-
-    # 合并 train_src_id, train_dst_id 并且去重
-    train_id = torch.concat((train_src_id, train_dst_id)).unique()
-    train_original_x = original_x[train_id]
-    train_final_x = final_x[train_id]
-
-    # 通过 oringal_x 学习一个多层感知机映射到 final_x
-    model = nn.Sequential(nn.Linear(original_x.shape[1], final_x.shape[1]), 
-                          nn.ReLU(),
-                          nn.Linear(final_x.shape[1], final_x.shape[1])).to(device)
-
-    Loss = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-    
-    for epoch in range(400):
-        model.train()
-        optimizer.zero_grad()
-        x_hat = model(train_original_x)
-        loss = Loss(x_hat, train_final_x.detach())
-        loss.backward()
-        optimizer.step()
-        print(f"\rmapping epoch {epoch+1} done", end="", flush=True)
-
-    model.eval()
-
-    # 将 test_pos_edge_index, test_neg_edge_index 中对应在 original 中的 test_original_x 映射到 final_x
-    test_src_id = torch.concat((test_pos_edge_index[0], test_neg_edge_index[0])).to(device)
-    test_dst_id = torch.concat((test_pos_edge_index[1], test_neg_edge_index[1])).to(device)
-    test_id = torch.concat((test_src_id, test_dst_id)).unique()
-    test_original_x = original_x[test_id]
-    test_final_x = model(test_original_x)
-    final_x[test_id] = test_final_x
-
-    with torch.no_grad():
-
-        y_test = torch.concat((torch.ones(test_pos_edge_index.shape[1]), torch.zeros(test_neg_edge_index.shape[1]))).to(device)
-
-        # score_test = model.predict(model.x, test_src_id, test_dst_id).to(device)
-        score_test = grace_model.predict(final_x, test_src_id, test_dst_id).to(device)
-
-        acc, auc, f1, micro_f1, macro_f1 = grace_model.test(score_test, y_test)
-
-        return acc, auc, f1, micro_f1, macro_f1
-
-        # print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
-
-    return acc, auc, f1, micro_f1, macro_f1
-
 def train():
 
     # train
@@ -280,7 +239,10 @@ def train():
     x = dataloader.create_feature(node_num)
     original_x = x.clone()
 
-    args.feature_dim = 64
+    if args.dataset == "cotton":
+        args.feature_dim = 64  # cotton
+    elif args.dataset == "napus":
+        args.feature_dim = 32  # napus
     linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
     model = MyGRACE(args)
     optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.005, weight_decay=5e-4)
@@ -338,10 +300,7 @@ def train():
     print(f"\nbest val acc: {best_acc:.4f}, auc: {best_auc:.4f}, f1: {best_f1:.4f}, micro_f1: {best_micro_f1:.4f}, macro_f1: {best_macro_f1:.4f}")
 
     # test
-    if args.dataset == "napus":
-        acc, auc, f1, micro_f1, macro_f1 = napus_test(model, original_x, x, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
-    else:
-        acc, auc, f1, micro_f1, macro_f1 = test(best_model, x, test_pos_edge_index, test_neg_edge_index)
+    acc, auc, f1, micro_f1, macro_f1 = test(best_model, x, test_pos_edge_index, test_neg_edge_index)
 
     print(f"test acc: {acc:.4f}, auc: {auc:.4f}, f1: {f1:.4f}, micro_f1: {micro_f1:.4f}, macro_f1: {macro_f1:.4f}")
 

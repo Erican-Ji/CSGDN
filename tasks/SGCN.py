@@ -15,7 +15,7 @@ sys.path.append("..")
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 
 args = parser.parse_args()
@@ -191,7 +191,10 @@ for period_name in period:
         original_x = x.clone()
 
         # Build and train model
-        args.feature_dim = 64
+        if args.dataset == "cotton":
+            args.feature_dim = 64  # cotton
+        elif args.dataset == "napus":
+            args.feature_dim = 32  # napus
         linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MySignedGCN(args, num_layers=2, lamb=5).to(device)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.01, weight_decay=5e-4)

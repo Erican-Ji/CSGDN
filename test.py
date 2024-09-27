@@ -9,7 +9,7 @@ from utils import DataLoad
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 
 args = parser.parse_args()

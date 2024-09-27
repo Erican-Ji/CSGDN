@@ -9,7 +9,7 @@ from utils import DataLoad
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 
 args = parser.parse_args()
@@ -24,7 +24,7 @@ else:
 
 args.device = device
 
-dataset = pd.read_excel(f"./data/TWAS_out_240913.xlsx", sheet_name=args.dataset)
+dataset = pd.read_excel(f"./data/TWAS.xlsx", sheet_name=args.dataset)
 seed = 114514
 torch.manual_seed(seed)
 
@@ -41,12 +41,12 @@ gene_name = dataset["GeneID"].unique()  # for all stage gene
 idx2gene = {idx: gene for idx, gene in enumerate(gene_name)}
 gene2idx = {gene: idx for idx, gene in enumerate(gene_name)}
 max_gene_idx = max(idx2gene.keys())
-if args.dataset == "cotton":
-    for idx, pheo in enumerate(pheo_name):
+if args.dataset == "napus":
+    for idx, pheo in enumerate(period):  # different period of SOC are seen as different pheo
         idx2gene[idx+max_gene_idx+1] = pheo
         gene2idx[pheo] = idx+max_gene_idx+1
-elif args.dataset == "napus":
-    for idx, pheo in enumerate(period):  # different period of SOC are seen as different pheo
+else:
+    for idx, pheo in enumerate(pheo_name):
         idx2gene[idx+max_gene_idx+1] = pheo
         gene2idx[pheo] = idx+max_gene_idx+1
 
@@ -54,65 +54,130 @@ def generate_graph():
 
     for period_name in period:
 
+        args.period = period_name
+
         # find all index of current preiod ( e.g 4PDA )
-        if args.dataset == "cotton":
+        if args.dataset == "napus":
+            cur_period_index = dataset["Phenotype"] == "SOC"
+            cur_period_dataset = dataset[cur_period_index].iloc[:, [1, 2, 3]]
+        else:
             cur_period_index = dataset["Stage"] == period_name
             # extract current period dataset
             cur_period_dataset = dataset[cur_period_index].iloc[:, [0, 2, 3]]
-        elif args.dataset == "napus":
-            cur_period_index = dataset["Phenotype"] == "SOC"
-            cur_period_dataset = dataset[cur_period_index].iloc[:, [1, 2, 3]]
 
         # reindex
-        if args.dataset == "cotton":
+        if args.dataset != "cotton_80":
+
+            if args.dataset == "napus":
+                cur_period_dataset["Stage"] = cur_period_dataset["Stage"].map(gene2idx)
+            else:
+                cur_period_dataset["Phenotype"] = cur_period_dataset["Phenotype"].map(gene2idx)
+            cur_period_dataset["GeneID"] = cur_period_dataset["GeneID"].map(gene2idx)
+
+            # to tensor
+            data = torch.tensor(cur_period_dataset.values).to(device)
+
+            data[data[:, 2] > 0, 2] = 1
+            data[data[:, 2] < 0, 2] = -1
+
+            # gene pheo sign_val
+            data = data[:, (1, 0, 2)].to(torch.int32)
+
+            # split train and test
+            shuffle = torch.randperm(data.size(0))
+            data = data[shuffle]
+
+            train_data = data[: int(data.size(0)*0.7)]
+            val_data = data[int(data.size(0)*0.7): int(data.size(0)*0.8)]
+            test_data = data[int(data.size(0)*0.8):]
+
+            """
+            # remove the node which does not appear in the train data
+            visited_dict = {node: 1 for node in train_data[:, 0]}
+            
+            val_mask = torch.tensor([True if visited_dict.get(node) else False for node in val_data[:, 0]])
+            test_mask = torch.tensor([True if visited_dict.get(node) else False for node in test_data[:, 0]])
+
+            train_data = torch.concat((train_data, val_data[~val_mask], test_data[~test_mask]), dim=0)
+            test_data = test_data[test_mask]
+
+            # resize the val and test data, val:test = 1:2
+            val_test = torch.concat((val_data, test_data), dim=0)
+            val_data = val_test[: int(val_test.size(0)*0.3)]
+            test_data = val_test[int(val_test.size(0)*0.3):]
+            """
+
+        # if the dataset is cotton_80, we regard them as the training data, and then we use the cotton dataset data as the val and test data. train: val: test = 7:1:2
+        else:
             cur_period_dataset["Phenotype"] = cur_period_dataset["Phenotype"].map(gene2idx)
-        elif args.dataset == "napus":
-            cur_period_dataset["Stage"] = cur_period_dataset["Stage"].map(gene2idx)
-        cur_period_dataset["GeneID"] = cur_period_dataset["GeneID"].map(gene2idx)
+            cur_period_dataset["GeneID"] = cur_period_dataset["GeneID"].map(gene2idx)
+            # to tensor
+            data = torch.tensor(cur_period_dataset.values).to(device)
+            data[data[:, 2] > 0, 2] = 1
+            data[data[:, 2] < 0, 2] = -1
+            data = data[:, (1, 0, 2)].to(torch.int32)
+            M = data.size(0)
 
-        # to tensor
-        data = torch.tensor(cur_period_dataset.values).to(device)
+            # load the 100% data
+            args.dataset = "cotton"
+            dataloader = DataLoad(args)
+            train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index, test_pos_edge_index, test_neg_edge_index = dataloader.load_data_format()
+            gene2idx_100, idx2gene_100 = dataloader.load_backup_dict()
+            data_100 = torch.concat((train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index, test_pos_edge_index, test_neg_edge_index), dim=1)
+            data_100_value = torch.cat([torch.ones(train_pos_edge_index.size(1)), -torch.ones(train_neg_edge_index.size(1)), torch.ones(val_pos_edge_index.size(1)), -torch.ones(val_neg_edge_index.size(1)), torch.ones(test_pos_edge_index.size(1)), -torch.ones(test_neg_edge_index.size(1))], dim=0).to(args.device).reshape(1, -1)
+            data_100 = torch.cat([data_100, data_100_value], dim=0).T
+            
+            # 打乱 data_100 顺序
+            mask = torch.randperm(data_100.size(0))
+            data_100 = data_100[mask]
 
-        data[data[:, 2] > 0, 2] = 1
-        data[data[:, 2] < 0, 2] = -1
+            data_dict = {}
+            for i in range(M):
+                gene_name = idx2gene[data[i][0].item()]
+                pheo_name = idx2gene[data[i][1].item()]
+                if data_dict.get(gene_name):
+                    data_dict[gene_name].update({pheo_name: data[i][2]})
+                    # data_dict[data[i][0]].update({data[i][1]: [i, data[i][2]]})
+                else:
+                    data_dict[gene_name] = {pheo_name: data[i][2]}
+                    # data_dict[data[i][0]] = {data[i][1]: [i, data[i][2]]}
 
-        # gene pheo sign_val
-        data = data[:, (1, 0, 2)].to(torch.int32)
+            args.dataset = "cotton_80"
 
-        # split train and test
-        shuffle = torch.randperm(data.size(0))
-        data = data[shuffle]
+            # 在 data_100 中抽取 data.size(0) 的 1/7 数据作为验证集，并且保证验证集中的节点在 data 中没有出现
+            val_len = int(M / 8)
+            test_len = int(M / 8) * 2
+            val_data = torch.tensor([]).to(args.device)
+            test_data = torch.tensor([]).to(args.device)
+            print(data)
+            for i in range(data_100.size(0)):
+                gene_name = idx2gene_100[data_100[i][0].item()]
+                pheo_name = idx2gene_100[data_100[i][1].item()]
+                if val_data.size(0) == val_len and test_data.size(0) == test_len:
+                    break
+                if (data_dict.get(gene_name) and data_dict[gene_name].get(pheo_name)) or not gene2idx.get(gene_name):
+                    continue
 
-        train_data = data[: int(data.size(0)*0.7)]
-        val_data = data[int(data.size(0)*0.7): int(data.size(0)*0.8)]
-        test_data = data[int(data.size(0)*0.8):]
+                triad = torch.tensor([gene2idx[gene_name], gene2idx[pheo_name], data_100[i][2]]).to(args.device).reshape(1, -1)
+                if val_data.size(0) < val_len:
+                    val_data = torch.concat([val_data, triad], dim=0)
+                else:
+                    test_data = torch.concat([test_data, triad], dim=0)
 
-        """
-        # remove the node which does not appear in the train data
-        visited_dict = {node: 1 for node in train_data[:, 0]}
-        
-        val_mask = torch.tensor([True if visited_dict.get(node) else False for node in val_data[:, 0]])
-        test_mask = torch.tensor([True if visited_dict.get(node) else False for node in test_data[:, 0]])
-
-        train_data = torch.concat((train_data, val_data[~val_mask], test_data[~test_mask]), dim=0)
-        test_data = test_data[test_mask]
-
-        # resize the val and test data, val:test = 1:2
-        val_test = torch.concat((val_data, test_data), dim=0)
-        val_data = val_test[: int(val_test.size(0)*0.3)]
-        test_data = val_test[int(val_test.size(0)*0.3):]
-        """
+            train_data = data
 
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_training.txt", train_data.cpu().numpy(), fmt='%d', delimiter='\t')
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_validation.txt", val_data.cpu().numpy(), fmt='%d', delimiter='\t')
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_test.txt", test_data.cpu().numpy(), fmt='%d', delimiter='\t')
+        """
+        """
 
 
-def generate_feature(period = "4DPA", feature_dim = 64):
+def generate_feature(period, feature_dim = 32):
 
     print("generating similarity adjacency matrix...")
 
-    if args.dataset == "cotton":
+    if args.dataset != "wheat":
 
         # use the similarity matrix among genes 
 
@@ -129,7 +194,7 @@ def generate_feature(period = "4DPA", feature_dim = 64):
 
         N = len(gene2idx)
 
-        sim_adjmat = torch.ones((N, N))
+        sim_adjmat = torch.eye(N)
 
         for sim_a, sim_b, sim_score in triad_data:
             sim_a = int(sim_a)
@@ -139,10 +204,9 @@ def generate_feature(period = "4DPA", feature_dim = 64):
 
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_feature.txt", sim_adjmat.cpu().numpy(), fmt='%.2f', delimiter='\t')
 
-    elif args.dataset == "napus":
+    else:
 
         # use the spectral feature
-
         args.period = period
         args.feature_dim = feature_dim
 
@@ -150,7 +214,7 @@ def generate_feature(period = "4DPA", feature_dim = 64):
         model = SignedGCN(args.feature_dim, args.feature_dim, num_layers=2, lamb=5).to(device)
         x = model.create_spectral_features(train_pos_edge_index, train_neg_edge_index)
 
-        np.savetxt(f"./data/napus/{args.dataset}_{args.period}_feature.txt", x.cpu().numpy(), delimiter="\t", fmt="%.2f")
+        np.savetxt(f"./data/{args.dataset}/{args.dataset}_{args.period}_feature.txt", x.cpu().numpy(), delimiter="\t", fmt="%.2f")
         
 
 if __name__ == "__main__":
@@ -163,11 +227,44 @@ if __name__ == "__main__":
 
     generate_graph()
 
-    # generate_feature()
+    generate_feature(args.period)
 
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
     for period_name in period:
         args.period = period_name
         Diffusion(args).generate_diffusion_graph()
+    """
+    """
 
 
+""" 翻转边
+import numpy as np
+import torch
+from utils import DataLoad, remove_edges
+from diffusion import Diffusion
+import argparse
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"],
+                    help='choose dataset')
+
+args = parser.parse_args()
+
+args.period = "4DPA"
+args.device = torch.device("cuda")
+
+train_data_index, train_data_value, _, _, _, _ = DataLoad(args).load_data()
+train_data_index, train_data_value, to_another_index, to_another_value = remove_edges(args, train_data_index, train_data_value, 0.2)
+
+# train data
+to_another_value = - to_another_value
+train_data_index = torch.cat([train_data_index, to_another_index], dim=1)
+train_data_value = torch.cat([train_data_value, to_another_value], dim=0)
+train_data = torch.cat([train_data_index, train_data_value.unsqueeze(0)], dim=0).T
+
+# save
+np.savetxt(f"./data/{args.dataset}/{args.dataset}_{args.period}_training.txt", train_data.cpu().numpy(), delimiter="\t", fmt="%d")
+
+Diffusion(args).generate_diffusion_graph()
+"""

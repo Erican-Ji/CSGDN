@@ -14,7 +14,7 @@ import os
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus"], 
+parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"], 
                     help='choose dataset')
 parser.add_argument('--times', type=int, default=1,
                     help='Random seed. ( seed = seed_list[args.times] )')
@@ -28,9 +28,11 @@ parser.add_argument('--alpha', type=float, default=0.8,
                     help='control the contribution of inter and intra loss')
 parser.add_argument('--lr', type=float, default=0.005,
                     help='Initial learning rate.')
+parser.add_argument('--dropout', type=float, default=5e-4,
+                    help='dropout rate.')
 parser.add_argument('--feature_dim', type=int, default=64,
                     help='initial embedding size of node')
-parser.add_argument('--epochs', type=int, default=400,
+parser.add_argument('--epochs', type=int, default=500,
                     help='initial embedding size of node')
 parser.add_argument('--predictor', type=str, default="2", 
                     help='predictor method (1-4 Linear)')
@@ -68,7 +70,7 @@ def test(model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index,
                                   nn.ReLU(),
                                   nn.Linear(model.x.shape[1], model.x.shape[1])).to(device)
     mapping_loss = nn.MSELoss()
-    mapping_optimizer = torch.optim.Adam(mapping_model.parameters(), lr=0.01, weight_decay=5e-4)
+    mapping_optimizer = torch.optim.Adam(mapping_model.parameters(), lr=0.01, weight_decay=args.dropout)
 
     x_original = model.x[edge_idx].detach()
     
@@ -110,7 +112,7 @@ def test(model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index,
             
             pos_prob = torch.exp(pos_log_prob)
             neg_prob = torch.exp(neg_log_prob)
-            prob = torch.concat([neg_prob, pos_prob], dim=1)
+            prob = torch.concat([pos_prob, neg_prob], dim=0)
             # back to gene name
             gene2idx, idx2gene = DataLoad(args).load_backup_dict()
 
@@ -186,20 +188,24 @@ def train(args):
         acc, auc, f1, micro_f1, macro_f1 = test(model, train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index)
         print(f"\rtimes {args.times} epoch {epoch+1} done! loss {loss.item()} acc {acc}, auc {auc}, f1 {f1}", end="", flush=True)
 
-        if auc + f1 > best_auc + best_f1:
+        # if auc > best_auc:
+        # if auc + f1 > best_auc + best_f1:
+        if auc + f1 >= best_auc + best_f1:
             best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1 = acc, auc, f1, micro_f1, macro_f1
             best_model = model
 
     print(f"\nbest val acc {best_acc} auc {best_auc}, best f1 {best_f1}, micro_f1 {best_mricro_f1}, macro_f1 {best_macro_f1}")
 
     # test
-    acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index)
+    # acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=True)
+    acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=False)
 
     return acc, auc, f1, micro_f1, macro_f1
 
 
-best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
-# best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
+# best = {"4DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '1', 'feature_dim': 128},
+# best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
+cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
 # best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16},  # GCN 751
             50: {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64}, 
             60: {'mask_ratio': 0.4, 'alpha': 0.2, 'beta': 1e-04, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
@@ -207,7 +213,17 @@ best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predi
             80: {'mask_ratio': 0.3, 'alpha': 0.6000000000000001, 'beta': 9.999999999999999e-05, 'tau': 0.1, 'predictor': 'dot', 'feature_dim': 16}, 
             100: {'mask_ratio': 0.3, 'alpha': 0.4, 'beta': 9.999999999999999e-06, 'tau': 0.05, 'predictor': 'dot', 'feature_dim': 16}}
 
-napus = {'mask_ratio': 0.2, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 16}
+napus = {"20DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.1, 'tau': 0.05, 'predictor': '1', 'feature_dim': 32}, 
+         "40DPA": {'mask_ratio': 0.2, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 128}}
+
+if args.dataset == "cotton":
+    best = cotton
+elif args.dataset == "napus":
+    best = napus
+elif args.dataset == "wheat":
+    args.feature_dim = 16
+    args.lr = 0.001
+    args.dropout = 0.1
 
 res_str = []
 
@@ -225,13 +241,13 @@ if __name__ == "__main__":
         args.period = period_name
 
         # hyper params
+        """
         args.mask_ratio = best.get(args.period).get("mask_ratio")
         args.alpha = best.get(args.period).get("alpha")
         args.beta = best.get(args.period).get("beta")
         args.tau = best.get(args.period).get("tau")
         args.predictor = best.get(args.period).get("predictor")
         args.feature_dim = best.get(args.period).get("feature_dim")
-        """
         """
 
         for times in range(5):
@@ -258,13 +274,13 @@ if __name__ == "__main__":
         res_str.append(f"Stage {args.period}: acc {avg[0]:.3f}+{std[0]:.3f}; auc {avg[1]:.3f}+{std[1]:.3f}; f1 {avg[2]:.3f}+{std[2]:.3f}; micro_f1 {avg[3]:.3f}+{std[3]:.3f}; macro_f1 {avg[4]:.3f}+{std[4]:.3f}\n")
 
         """
+        """
         with open(f"./results/{args.dataset}/CSGDN/{args.period}_res.txt", "w") as f:
             for line in res.tolist():
                 f.writelines(str(line))
                 f.writelines("\n")
             f.writelines("\n")
             f.writelines(res_str[-1])
-        """
 
         break
 
