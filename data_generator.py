@@ -223,7 +223,6 @@ def generate_graph():
             data_100_value = torch.cat([torch.ones(train_pos_edge_index.size(1)), -torch.ones(train_neg_edge_index.size(1)), torch.ones(val_pos_edge_index.size(1)), -torch.ones(val_neg_edge_index.size(1)), torch.ones(test_pos_edge_index.size(1)), -torch.ones(test_neg_edge_index.size(1))], dim=0).to(args.device).reshape(1, -1)
             data_100 = torch.cat([data_100, data_100_value], dim=0).T
             
-            # 打乱 data_100 顺序
             mask = torch.randperm(data_100.size(0))
             data_100 = data_100[mask]
 
@@ -240,7 +239,6 @@ def generate_graph():
 
             args.dataset = "cotton_80"
 
-            # 在 data_100 中抽取 data.size(0) 的 1/7 数据作为验证集，并且保证验证集中的节点在 data 中没有出现
             val_len = int(M / 8)
             test_len = int(M / 8) * 2
             val_data = torch.tensor([]).to(args.device)
@@ -264,8 +262,6 @@ def generate_graph():
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_training.txt", train_data.cpu().numpy(), fmt='%d', delimiter='\t')
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_validation.txt", val_data.cpu().numpy(), fmt='%d', delimiter='\t')
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_test.txt", test_data.cpu().numpy(), fmt='%d', delimiter='\t')
-        """
-        """
 
 
 def generate_feature(period, feature_dim = 32):
@@ -284,7 +280,6 @@ def generate_feature(period, feature_dim = 32):
                 continue
             triad_data.append([gene2idx[each[1]], gene2idx[each[2]], each[3]])
 
-        # TODO triad_data have a lot of duplicate data
         triad_data = torch.tensor(triad_data).to(device)
 
         N = len(gene2idx)
@@ -344,12 +339,8 @@ if __name__ == "__main__":
     np.save(f"./data/{args.dataset}/{args.dataset}_period.npy", period)
     np.save(f"./data/{args.dataset}/{args.dataset}_idx2gene.npy", idx2gene)
     np.save(f"./data/{args.dataset}/{args.dataset}_gene2idx.npy", gene2idx)
-    """
-    """
 
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
     for period_name in period:
         args.period = period_name
         Diffusion(args).generate_diffusion_graph()
-    """
-    """

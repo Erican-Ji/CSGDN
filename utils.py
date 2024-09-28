@@ -97,13 +97,6 @@ class DataLoad:
         data_index = diffusion_graph[:, :2].T
         data_value = diffusion_graph[:, 2]
 
-        """ return pos & neg edge index
-        diff_pos_edge_index = data_index[:, data_value > 0]
-        diff_neg_edge_index = data_index[:, data_value < 0]
-
-        return diff_pos_edge_index, diff_neg_edge_index
-        """
-
         return data_index, data_value
 
     def load_backup_dict(self):
