@@ -195,6 +195,10 @@ for period_name in period:
             args.feature_dim = 64  # cotton
         elif args.dataset == "napus":
             args.feature_dim = 32  # napus
+        elif args.dataset == "wheat":
+            args.feature_dim = 2  # wheat
+        elif args.dataset == "cotton_80":
+            args.feature_dim = 16  # cotton_80
         linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MySignedGCN(args, num_layers=2, lamb=5).to(device)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.01, weight_decay=5e-4)

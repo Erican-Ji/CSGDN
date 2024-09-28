@@ -56,6 +56,7 @@ args.device = device
 # 81007
 # 21
 seed_list = [1482, 1111, 490, 510, 197]
+seed_list = [114]
 seed = seed_list[args.times-1]
 args.seed = seed
 
@@ -203,9 +204,9 @@ def train(args):
     return acc, auc, f1, micro_f1, macro_f1
 
 
-# best = {"4DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '1', 'feature_dim': 128},
+cotton = {"4DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '1', 'feature_dim': 128},
 # best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},
-cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
+# cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64},  # GAT best 0.781
 # best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16},  # GCN 751
             50: {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64}, 
             60: {'mask_ratio': 0.4, 'alpha': 0.2, 'beta': 1e-04, 'tau': 0.05, 'predictor': '4', 'feature_dim': 64}, 
@@ -213,17 +214,22 @@ cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, '
             80: {'mask_ratio': 0.3, 'alpha': 0.6000000000000001, 'beta': 9.999999999999999e-05, 'tau': 0.1, 'predictor': 'dot', 'feature_dim': 16}, 
             100: {'mask_ratio': 0.3, 'alpha': 0.4, 'beta': 9.999999999999999e-06, 'tau': 0.05, 'predictor': 'dot', 'feature_dim': 16}}
 
-napus = {"20DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.1, 'tau': 0.05, 'predictor': '1', 'feature_dim': 32}, 
-         "40DPA": {'mask_ratio': 0.2, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 128}}
+napus = {"20DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.1, 'tau': 0.05, 'predictor': '1', 'feature_dim': 32}, }
+
+cotton_80 = {"4DPA": {'mask_ratio': 0.2, 'alpha': 0.2, 'beta': 0.001, 'tau': 0.05, 'predictor': '2', 'feature_dim': 16}}
 
 if args.dataset == "cotton":
     best = cotton
 elif args.dataset == "napus":
     best = napus
 elif args.dataset == "wheat":
-    args.feature_dim = 16
-    args.lr = 0.001
-    args.dropout = 0.1
+    pass
+    # args.feature_dim = 16
+    # args.lr = 0.001
+    # args.dropout = 0.1
+    # args.mask_ratio = 0
+elif args.dataset == "cotton_80":
+    best = cotton_80
 
 res_str = []
 
@@ -252,7 +258,7 @@ if __name__ == "__main__":
 
         for times in range(5):
             # seed
-            args.seed = seed_list[times]
+            args.seed = seed_list[0]
             args.times = times + 1
 
             torch.random.manual_seed(args.seed)
@@ -271,7 +277,7 @@ if __name__ == "__main__":
         res = np.array(res)
         avg = res.mean(axis=0)
         std = res.std(axis=0)
-        res_str.append(f"Stage {args.period}: acc {avg[0]:.3f}+{std[0]:.3f}; auc {avg[1]:.3f}+{std[1]:.3f}; f1 {avg[2]:.3f}+{std[2]:.3f}; micro_f1 {avg[3]:.3f}+{std[3]:.3f}; macro_f1 {avg[4]:.3f}+{std[4]:.3f}\n")
+        res_str.append(f"Stage {args.period}: acc {avg[0]:.4f}+{std[0]:.4f}; auc {avg[1]:.4f}+{std[1]:.4f}; f1 {avg[2]:.4f}+{std[2]:.4f}; micro_f1 {avg[4]:.4f}+{std[4]:.4f}; macro_f1 {avg[4]:.4f}+{std[4]:.4f}\n")
 
         """
         """
@@ -286,3 +292,25 @@ if __name__ == "__main__":
 
     for each in res_str:
         print(each)
+
+"""
+times 1 epoch 500 done! loss -0.19210490584373474 acc 0.7014925373134329, auc 0.7164246823956442, f1 0.705882352941176504
+best val acc 0.8656716417910447 auc 0.8693284936479129, best f1 0.8524590163934426, micro_f1 0.8656716417910447, macro_f1 0.864585672580283
+times 1: acc 0.7744360902255639, auc 0.7837552742616035, f1 0.75, micro_f1 0.7744360902255639, macro_f1 0.7722602739726028
+
+times 2 epoch 500 done! loss -0.21233895421028137 acc 0.8507462686567164, auc 0.8480036297640653, f1 0.82758620689655176
+best val acc 0.9402985074626866 auc 0.9432849364791289, best f1 0.9333333333333333, micro_f1 0.9402985074626866, macro_f1 0.9396396396396396
+times 2: acc 0.8270676691729323, auc 0.80168776371308, f1 0.7578947368421053, micro_f1 0.8270676691729323, macro_f1 0.8116959064327485
+
+times 3 epoch 500 done! loss -0.1913270503282547 acc 0.746268656716418, auc 0.764065335753176, f1 0.7536231884057971035
+best val acc 0.9253731343283582 auc 0.9219600725952813, best f1 0.9122807017543859, micro_f1 0.9253731343283582, macro_f1 0.9236728184096605
+times 3: acc 0.7593984962406015, auc 0.779887482419128, f1 0.75, micro_f1 0.7593984962406015, macro_f1 0.7590579710144927
+
+times 4 epoch 500 done! loss -0.23301105201244354 acc 0.7164179104477612, auc 0.7254990925589837, f1 0.70769230769230774
+best val acc 0.8805970149253731 auc 0.882486388384755, best f1 0.8666666666666667, micro_f1 0.8805970149253731, macro_f1 0.8792792792792793
+times 4: acc 0.7744360902255639, auc 0.7691045475855602, f1 0.7272727272727273, micro_f1 0.7744360902255639, macro_f1 0.7674825174825175
+
+times 5 epoch 500 done! loss -0.12970617413520813 acc 0.7910447761194029, auc 0.8035390199637025, f1 0.78787878787878789
+best val acc 0.8805970149253731 auc 0.8865698729582576, best f1 0.8709677419354839, micro_f1 0.8805970149253731, macro_f1 0.8799283154121864
+times 5: acc 0.7669172932330827, auc 0.7774261603375529, f1 0.743801652892562, micro_f1 0.7
+"""

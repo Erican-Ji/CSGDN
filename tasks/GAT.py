@@ -35,6 +35,10 @@ if args.dataset == "cotton":
     args.predictor = "2"  # cotton
 elif args.dataset == "napus":
     args.predictor = "1"  # napus
+elif args.dataset == "cotton_80":
+    args.predictor = "2"  # cotton_80
+elif args.dataset == "wheat":
+    args.predictor = "2"
 
 class MyGAT(nn.Module):
 
@@ -186,6 +190,10 @@ for period_name in period:
             args.feature_dim = 64  # cotton
         elif args.dataset == "napus":
             args.feature_dim = 32  # napus
+        elif args.dataset == "cotton_80":
+            args.feature_dim = 16
+        elif args.dataset == "wheat":
+            args.feature_dim = 64
         linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MyGAT(args, layer_num=2)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.005, weight_decay=5e-4)

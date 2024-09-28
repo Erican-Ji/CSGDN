@@ -41,6 +41,10 @@ elif args.dataset == "napus":
     args.mask_ratio = 0.8
 elif args.dataset == "cotton_80":
     args.predictor = "2"  # cotton
+    beta = 1e-3
+    args.mask_ratio = 0.2
+elif args.dataset == "wheat":
+    args.predictor = "2"
     beta = 1e-2
     args.mask_ratio = 0.4
 
@@ -243,6 +247,10 @@ def train():
         args.feature_dim = 64  # cotton
     elif args.dataset == "napus":
         args.feature_dim = 32  # napus
+    elif args.dataset == "cotton_80":
+        args.feature_dim = 16
+    elif args.dataset == "wheat":
+        args.feature_dim = 64
     linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
     model = MyGRACE(args)
     optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=0.005, weight_decay=5e-4)

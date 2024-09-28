@@ -5,7 +5,7 @@ import os
 import argparse
 from diffusion import Diffusion
 from torch_geometric.nn import SignedGCN
-from utils import DataLoad
+from utils import DataLoad, remove_edges
 
 parser = argparse.ArgumentParser()
 
@@ -49,6 +49,102 @@ else:
     for idx, pheo in enumerate(pheo_name):
         idx2gene[idx+max_gene_idx+1] = pheo
         gene2idx[pheo] = idx+max_gene_idx+1
+
+def wheat_graph(p_value = 0.05):
+
+    # read the correlation matrix
+    cor = ["BM_cor", "RL_cor", "RA_cor", "RV_cor"]
+    p = ["BM_pvalue", "RL_pvalue", "RA_pvalue", "RV_pvalue"]
+
+    df = pd.read_excel(f"./data/wheat_correlation_matrix.xlsx").fillna(p_value)
+
+    cor_data = torch.tensor([df[col] for col in cor]).T.to(args.device)
+    p_data = torch.tensor([df[col] for col in p]).T.to(args.device)
+
+    idx = torch.where(p_data < p_value)  # ph idx 0 1 2 3 not +70199 yet
+    cor_data = cor_data[idx]
+
+    cor_data[cor_data < 0] = -1
+    cor_data[cor_data > 0] = 1
+
+    cor_data = torch.cat((idx[0].reshape(-1, 1), idx[1].reshape(-1, 1), cor_data.reshape(-1, 1)), dim=1).to(torch.int)
+
+    # in cor_data, gene name: gene-xxx, pheo name: xxx_cor
+    cor_idx2gene = {idx: gene[5:] for idx, gene in enumerate(df["Gene"])}
+    cor_gene2idx = {gene[5:]: idx for idx, gene in enumerate(df["Gene"])}
+    cor_idx2pheo = {idx: pheo[: 2] for idx, pheo in enumerate(cor)}
+    cor_pheo2idx = {pheo[: 2]: idx for idx, pheo in enumerate(cor)}
+
+    # read the TWAS matrix
+    for period_name in period:
+        
+        args.period = period_name
+        cur_period_index = dataset["Stage"] == period_name
+        # extract current period dataset
+        cur_period_dataset = dataset[cur_period_index].iloc[:, [2, 0, 3]]
+
+        gene_set = set()
+        pheo_set = set()
+        cur_dict = {}
+        for cur_period_data in cur_period_dataset.itertuples():
+            triad = cur_period_data[1: ]
+            gene_name = triad[0]
+            pheo_name = triad[1]
+            gene_set.add(gene_name)
+            pheo_set.add(pheo_name)
+            if cur_dict.get(gene_name):
+                cur_dict[gene_name].update({pheo_name: triad[2]})
+            else:
+                cur_dict[gene_name] = {pheo_name: triad[2]}
+        
+        train_data = pd.DataFrame(columns=["GeneID", "Phenotype", "TWAS.Zscore"])
+        cur_num = cur_period_dataset.shape[0]
+        train_num = int(cur_num * 8 // 3)
+        M = train_num
+        i = 0
+        while train_num:
+            triad = cor_data[i]
+            gene_name = cor_idx2gene[triad[0].item()]
+            pheo_name = cor_idx2pheo[triad[1].item()]
+            if not (cur_dict.get(gene_name) and cur_dict[gene_name].get(pheo_name)):
+                gene_set.add(gene_name)
+                pheo_set.add(pheo_name)
+                train_data = train_data.merge(pd.DataFrame([[gene_name, pheo_name, triad[2].item()]], columns=["GeneID", "Phenotype", "TWAS.Zscore"]), how="outer")
+                train_num -= 1
+            i += 1
+
+        idx2gene = {idx: gene for idx, gene in enumerate(gene_set)}
+        gene2idx = {gene: idx for idx, gene in enumerate(gene_set)}
+        max_gene_idx = max(idx2gene.keys())
+        for idx, pheo in enumerate(pheo_set):
+            idx2gene[idx+max_gene_idx+1] = pheo
+            gene2idx[pheo] = idx+max_gene_idx+1
+
+        # merge cur_period_dataset and train_data, they have the same columns header
+        cur_period_dataset = pd.concat([train_data, cur_period_dataset], axis=0, join='outer')
+        # row index is not continuous, so we need to reset the index
+        cur_period_dataset = cur_period_dataset.reset_index(drop=True)
+
+        cur_period_dataset["Phenotype"] = cur_period_dataset["Phenotype"].map(gene2idx)
+        cur_period_dataset["GeneID"] = cur_period_dataset["GeneID"].map(gene2idx)
+
+        data = torch.tensor(cur_period_dataset.values).to(device)
+
+        data[data[:, 2] > 0, 2] = 1
+        data[data[:, 2] < 0, 2] = -1
+
+        train_data = data[: M]
+        val_test_data = data[M: ]
+
+        # split val and test
+        val_data = val_test_data[: int(cur_num * 0.3)]
+        test_data = val_test_data[int(cur_num * 0.3): ]
+
+        np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_training.txt", train_data.cpu().numpy(), fmt='%d', delimiter='\t')
+        np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_validation.txt", val_data.cpu().numpy(), fmt='%d', delimiter='\t')
+        np.savetxt(f"./data/{args.dataset}/{args.dataset}_{period_name}_test.txt", test_data.cpu().numpy(), fmt='%d', delimiter='\t')
+
+        return idx2gene, gene2idx
 
 def generate_graph():
 
@@ -149,7 +245,6 @@ def generate_graph():
             test_len = int(M / 8) * 2
             val_data = torch.tensor([]).to(args.device)
             test_data = torch.tensor([]).to(args.device)
-            print(data)
             for i in range(data_100.size(0)):
                 gene_name = idx2gene_100[data_100[i][0].item()]
                 pheo_name = idx2gene_100[data_100[i][1].item()]
@@ -177,7 +272,7 @@ def generate_feature(period, feature_dim = 32):
 
     print("generating similarity adjacency matrix...")
 
-    if args.dataset != "wheat":
+    if True:
 
         # use the similarity matrix among genes 
 
@@ -204,9 +299,10 @@ def generate_feature(period, feature_dim = 32):
 
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_feature.txt", sim_adjmat.cpu().numpy(), fmt='%.2f', delimiter='\t')
 
+    """
+    # use the spectral feature
     else:
 
-        # use the spectral feature
         args.period = period
         args.feature_dim = feature_dim
 
@@ -215,19 +311,41 @@ def generate_feature(period, feature_dim = 32):
         x = model.create_spectral_features(train_pos_edge_index, train_neg_edge_index)
 
         np.savetxt(f"./data/{args.dataset}/{args.dataset}_{args.period}_feature.txt", x.cpu().numpy(), delimiter="\t", fmt="%.2f")
+    """
+
+def ptb_graph(ptb_ratio = 0.1, period = "4DPA"):
+
+    args.period = period
+
+    train_data_index, train_data_value, _, _, _, _ = DataLoad(args).load_data()
+    train_data_index, train_data_value, to_another_index, to_another_value = remove_edges(args, train_data_index, train_data_value, ptb_ratio)
+
+    # train data
+    to_another_value = - to_another_value
+    train_data_index = torch.cat([train_data_index, to_another_index], dim=1)
+    train_data_value = torch.cat([train_data_value, to_another_value], dim=0)
+    train_data = torch.cat([train_data_index, train_data_value.unsqueeze(0)], dim=0).T
+
+    # save
+    np.savetxt(f"./data/{args.dataset}/{args.dataset}_{args.period}_training.txt", train_data.cpu().numpy(), delimiter="\t", fmt="%d")
+
+    Diffusion(args).generate_diffusion_graph()
         
 
 if __name__ == "__main__":
     # save the dict
-    """
-    """
+    if args.dataset == "wheat":
+        idx2gene, gene2idx = wheat_graph()
+    else:
+        generate_graph()
+
+    generate_feature(args.period)
+
     np.save(f"./data/{args.dataset}/{args.dataset}_period.npy", period)
     np.save(f"./data/{args.dataset}/{args.dataset}_idx2gene.npy", idx2gene)
     np.save(f"./data/{args.dataset}/{args.dataset}_gene2idx.npy", gene2idx)
-
-    generate_graph()
-
-    generate_feature(args.period)
+    """
+    """
 
     period = np.load(f"./data/{args.dataset}/{args.dataset}_period.npy", allow_pickle=True)
     for period_name in period:
@@ -235,36 +353,3 @@ if __name__ == "__main__":
         Diffusion(args).generate_diffusion_graph()
     """
     """
-
-
-""" 翻转边
-import numpy as np
-import torch
-from utils import DataLoad, remove_edges
-from diffusion import Diffusion
-import argparse
-
-parser = argparse.ArgumentParser()
-
-parser.add_argument('--dataset', type=str, default="cotton", choices = ["cotton", "wheat", "napus", "cotton_80"],
-                    help='choose dataset')
-
-args = parser.parse_args()
-
-args.period = "4DPA"
-args.device = torch.device("cuda")
-
-train_data_index, train_data_value, _, _, _, _ = DataLoad(args).load_data()
-train_data_index, train_data_value, to_another_index, to_another_value = remove_edges(args, train_data_index, train_data_value, 0.2)
-
-# train data
-to_another_value = - to_another_value
-train_data_index = torch.cat([train_data_index, to_another_index], dim=1)
-train_data_value = torch.cat([train_data_value, to_another_value], dim=0)
-train_data = torch.cat([train_data_index, train_data_value.unsqueeze(0)], dim=0).T
-
-# save
-np.savetxt(f"./data/{args.dataset}/{args.dataset}_{args.period}_training.txt", train_data.cpu().numpy(), delimiter="\t", fmt="%d")
-
-Diffusion(args).generate_diffusion_graph()
-"""

@@ -276,6 +276,18 @@ elif args.dataset == "napus":
     args.beta = 0.1
     args.tau = 0.05
     args.aug_ratio = 0.8
+elif args.dataset == "cotton_80":
+    args.predictor = "2"  # cotton_80
+    args.alpha = 0.2
+    args.beta = 0.001
+    args.tau = 0.05
+    args.aug_ratio = 0.2
+elif args.dataset == "wheat":
+    args.predictor = "2"  # wheat
+    args.alpha = 0.8
+    args.beta = 0.01
+    args.tau = 0.05
+    args.aug_ratio = 0.4
 
 if not os.path.exists(f"./results/{args.dataset}/SGCL"):
     os.makedirs(f"./results/{args.dataset}/SGCL")
@@ -307,6 +319,10 @@ for period_name in period:
             args.feature_dim = 64  # cotton
         elif args.dataset == "napus":
             args.feature_dim = 32  # napus
+        elif args.dataset == "cotton_80":
+            args.feature_dim = 16
+        elif args.dataset == "wheat":
+            args.feature_dim = 64  # wheat
         linear_DR = nn.Linear(x.shape[1], args.feature_dim).to(device)
         model = MySGCL(args).to(device)
         optimizer = torch.optim.Adam(chain.from_iterable([model.parameters(), linear_DR.parameters()]), lr=args.lr, weight_decay=5e-4)
