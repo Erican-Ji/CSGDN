@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 
@@ -68,7 +69,16 @@ class DataLoad:
         """
 
         # node_num can be used to create spectral_features
+        """
+        if self.args.dataset == "wheat":
+            from data_generator import generate_feature
+            if not os.path.exists(f"./data/{self.args.dataset}/{self.args.dataset}_{self.args.period}_feature.txt"):
+                generate_feature(self.args.period, self.args.feature_dim)
+            sim_matrix = np.loadtxt(f"./data/{self.args.dataset}/{self.args.dataset}_{self.args.period}_feature.txt", delimiter="\t")
 
+        else:
+            sim_matrix = np.loadtxt(f"./data/{self.args.dataset}/{self.args.dataset}_feature.txt", delimiter="\t")
+        """
         sim_matrix = np.loadtxt(f"./data/{self.args.dataset}/{self.args.dataset}_feature.txt", delimiter="\t")
 
         return torch.tensor(sim_matrix, dtype=torch.float32).to(self.args.device)
@@ -122,6 +132,7 @@ def remove_edges(args, edge_index, edge_value, mask_ratio = 0.1):
     mask = mask[0].bool()
 
     return edge_index[:, mask], edge_value.reshape(1, -1)[:, mask][0]
+    # return edge_index[:, mask], edge_value.reshape(1, -1)[:, mask][0], edge_index[:, ~mask], edge_value.reshape(1, -1)[:, ~mask][0] 
     
 
 def split_pos_neg(edge_index, edge_value):
