@@ -6,8 +6,6 @@ from torch_geometric.utils import negative_sampling
 from torch_geometric.nn import GCNConv, GATConv
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
 
-from utils import DataLoad
-
 class CSGDN(nn.Module):
 
     def __init__(self, args, layer_num = 2) -> None:
@@ -169,11 +167,9 @@ class CSGDN(nn.Module):
             pos_score,
             train_pos_edge_index.new_full((train_pos_edge_index.size(1), ), 0))
         nll_loss += F.nll_loss(
-        # nll_loss += 3 * F.nll_loss(
             neg_score,
             train_neg_edge_index.new_full((train_neg_edge_index.size(1), ), 1))
-        nll_loss += 0.03 * F.nll_loss(
-        # nll_loss += F.nll_loss(
+        nll_loss += F.nll_loss(
             none_score,
             none_edge_index.new_full((none_edge_index.size(1), ), 2))
         """
@@ -249,7 +245,6 @@ class Predictor(nn.Module):
     def forward(self, ux, vx):
         """link (u, v)"""
         x = torch.concat((ux, vx), dim=-1)
-        # res = self.predictor(x).flatten()
         res = self.predictor(x)
 
         return res
