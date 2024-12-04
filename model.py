@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.utils import negative_sampling
 from torch_geometric.nn import GCNConv, GATConv
-from sklearn.metrics import f1_score, roc_auc_score, accuracy_score
+from sklearn.metrics import f1_score, roc_auc_score, accuracy_score, precision_score, recall_score, precision_recall_curve
+import sklearn.metrics as metrics
 
 class CSGDN(nn.Module):
 
@@ -149,8 +150,8 @@ class CSGDN(nn.Module):
         """predict training dataset"""
         score = self.predictor(x[edge_index[0]], x[edge_index[1]])
 
-        # return F.softmax(score, dim=1)
-        return torch.log_softmax(score, dim=1)
+        return F.softmax(score, dim=1)
+        # return torch.log_softmax(score, dim=1)
 
 
     def compute_label_loss(self, x, train_pos_edge_index, train_neg_edge_index):
@@ -163,6 +164,7 @@ class CSGDN(nn.Module):
         none_score = self.predict(x, none_edge_index)
 
         nll_loss = 0
+        """
         nll_loss += F.nll_loss(
             pos_score,
             train_pos_edge_index.new_full((train_pos_edge_index.size(1), ), 0))
@@ -182,7 +184,6 @@ class CSGDN(nn.Module):
         nll_loss += F.cross_entropy(
             none_score,
             none_edge_index.new_full((none_edge_index.size(1), ), 2))
-        """
 
         return nll_loss / 3.0
     
@@ -209,7 +210,12 @@ class CSGDN(nn.Module):
         micro_f1 = f1_score(test_y, pred, average="micro")
         macro_f1 = f1_score(test_y, pred, average="macro")
 
-        return acc, auc, f1, micro_f1, macro_f1
+        pr, re, _ = precision_recall_curve(test_y, pred)
+        aupr = metrics.auc(re, pr)
+        precision = precision_score(test_y, pred)
+        recall = recall_score(test_y, pred)
+        
+        return acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall
 
 
 class Predictor(nn.Module):

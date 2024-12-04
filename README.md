@@ -1,6 +1,6 @@
 # CSGDN
 
-<>
+<https://arxiv.org/abs/2410.07511>
 
 ## Frameworks
 
@@ -16,9 +16,9 @@ There is no dataset provided in the code, if you want to use it, please download
 
 |data|data_name|
 |:-:|:-:|
-|Ghirsutum|<https://Ghirsutum.hzau.edu.cn/EN/Download.htm>|
-|Brassica napus|/|
-|Wheat|/|
+|Ghirsutum|<https://doi.org/10.1038/s41588-023-01530-8>|
+|Brassica napus|<https://doi.org/10.1016/j.molp.2020.12.003>|
+|Wheat|<https://doi.org/10.1111/nph.19589>|
 
 For the node features (i.e. gene similarity matrix), please calculate them yourself and put them into `data/data_name/ori_sim.txt`, e.g. `data/cotton/ori_sim.txt`
 
