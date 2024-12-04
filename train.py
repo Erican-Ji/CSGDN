@@ -53,7 +53,7 @@ args.device = device
 # 41919
 # 81007
 # 21
-seed_list = [1482, 1111, 490, 510, 197]
+# seed_list = [1482, 1111, 490, 510, 197]
 seed_list = [114]
 seed = seed_list[args.times-1]
 args.seed = seed
@@ -100,7 +100,7 @@ def test(model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index,
             [score_test.new_ones((pos_score.size(0))),
              score_test.new_zeros(neg_score.size(0))])
 
-        acc, auc, f1, micro_f1, macro_f1 = model.test(score_test, y_test)
+        acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall = model.test(score_test, y_test)
 
         # print the original gene name
         if args.dataset == "cotton" and see_prob:
@@ -128,7 +128,7 @@ def test(model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index,
 
         # print(f"\nacc {acc:.6f}; auc {auc:.6f}; f1 {f1:.6f}; micro_f1 {micro_f1:.6f}; macro_f1 {macro_f1:.6f}")
 
-    return acc, auc, f1, micro_f1, macro_f1
+    return acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall
 
 
 def train(args):
@@ -157,7 +157,7 @@ def train(args):
 
     edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=1).to(args.device)
 
-    best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1 = 0, 0, 0, 0, 0
+    best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1, best_aupr, best_precision, best_recall = 0, 0, 0, 0, 0, 0, 0, 0
     best_model = None
 
     for epoch in range(args.epochs):
@@ -181,25 +181,25 @@ def train(args):
         loss.backward()
         optimizer.step()
 
-        acc, auc, f1, micro_f1, macro_f1 = test(model, train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index)
-        print(f"\rtimes {args.times} epoch {epoch+1} done! loss {loss.item()} acc {acc}, auc {auc}, f1 {f1}", end="", flush=True)
+        acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall = test(model, train_pos_edge_index, train_neg_edge_index, val_pos_edge_index, val_neg_edge_index)
+        print(f"\rtimes {args.times} epoch {epoch+1} done! loss {loss.item()} acc {acc}, auc {auc}, f1 {f1} micro_f1 {micro_f1}, macro_f1 {macro_f1}, aupr {aupr}, precision {precision}, recall {recall}", end="", flush=True)
 
         if auc + f1 >= best_auc + best_f1:
-            best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1 = acc, auc, f1, micro_f1, macro_f1
+            best_acc, best_auc, best_f1, best_mricro_f1, best_macro_f1, best_aupr, best_precision, best_recall = acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall
             best_model = model
 
-    print(f"\nbest val acc {best_acc} auc {best_auc}, best f1 {best_f1}, micro_f1 {best_mricro_f1}, macro_f1 {best_macro_f1}")
+    print(f"\nbest val acc {best_acc} auc {best_auc}, best f1 {best_f1}, micro_f1 {best_mricro_f1}, macro_f1 {best_macro_f1}, aupr {best_aupr}, precision {best_precision}, recall {best_recall}")
 
     # test
-    acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=True)
-    # acc, auc, f1, micro_f1, macro_f1 = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=False)
+    acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=True)
+    # acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall = test(best_model, train_pos_edge_index, train_neg_edge_index, test_pos_edge_index, test_neg_edge_index, see_prob=False)
 
-    return acc, auc, f1, micro_f1, macro_f1
+    return acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall
 
 
-cotton = {"4DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '1', 'feature_dim': 128},}
+# cotton = {"4DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.05, 'predictor': '1', 'feature_dim': 128},}
 # best = {"4DPA": {'mask_ratio': 0, 'alpha': 0.2, 'beta': 0.01, 'tau': 0.1, 'predictor': '2', 'feature_dim': 64},}
-# cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64}, } # GAT best 0.781
+cotton = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.01, 'tau': 0.05, 'predictor': '2', 'feature_dim': 64}, } # GAT best 0.781
 # best = {"4DPA": {'mask_ratio': 0.4, 'alpha': 0.8, 'beta': 0.0001, 'tau': 0.05, 'predictor': '1', 'feature_dim': 16}, } # GCN 751
 
 napus = {"20DPA": {'mask_ratio': 0.8, 'alpha': 0.2, 'beta': 0.1, 'tau': 0.05, 'predictor': '1', 'feature_dim': 32}, }
@@ -228,13 +228,14 @@ if __name__ == "__main__":
         res = []
         args.period = period_name
 
-        # hyper params
-        args.mask_ratio = best.get(args.period).get("mask_ratio")
-        args.alpha = best.get(args.period).get("alpha")
-        args.beta = best.get(args.period).get("beta")
-        args.tau = best.get(args.period).get("tau")
-        args.predictor = best.get(args.period).get("predictor")
-        args.feature_dim = best.get(args.period).get("feature_dim")
+        if (args.dataset != "wheat" and args.dataset != "cotton") and (args.dataset == "cotton" and args.period == "4DPA"):
+            # hyper params
+            args.mask_ratio = best.get(args.period).get("mask_ratio")
+            args.alpha = best.get(args.period).get("alpha")
+            args.beta = best.get(args.period).get("beta")
+            args.tau = best.get(args.period).get("tau")
+            args.predictor = best.get(args.period).get("predictor")
+            args.feature_dim = best.get(args.period).get("feature_dim")
 
         for times in range(5):
             # seed
@@ -246,17 +247,17 @@ if __name__ == "__main__":
             if torch.cuda.is_available():
                 torch.cuda.manual_seed(args.seed)
 
-            acc, auc, f1, micro_f1, macro_f1 = train(args)
-            print(f"times {times+1}: acc {acc}, auc {auc}, f1 {f1}, micro_f1 {micro_f1}, macro_f1 {macro_f1}")
+            acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall = train(args)
+            print(f"times {times+1}: acc {acc}, auc {auc}, f1 {f1}, micro_f1 {micro_f1}, macro_f1 {macro_f1}, aupr {aupr}, precision {precision}, recall {recall}")
             print()
 
-            res.append([acc, auc, f1, micro_f1, macro_f1])
+            res.append([acc, auc, f1, micro_f1, macro_f1, aupr, precision, recall])
 
         # calculate the avg of each times
         res = np.array(res)
         avg = res.mean(axis=0)
         std = res.std(axis=0)
-        res_str.append(f"Stage {args.period}: acc {avg[0]:.4f}+{std[0]:.4f}; auc {avg[1]:.4f}+{std[1]:.4f}; f1 {avg[2]:.4f}+{std[2]:.4f}; micro_f1 {avg[4]:.4f}+{std[4]:.4f}; macro_f1 {avg[4]:.4f}+{std[4]:.4f}\n")
+        res_str.append(f"Stage {args.period}: acc {avg[0]:.4f}+{std[0]:.4f}; auc {avg[1]:.4f}+{std[1]:.4f}; f1 {avg[2]:.4f}+{std[2]:.4f}; micro_f1 {avg[4]:.4f}+{std[4]:.4f}; macro_f1 {avg[4]:.4f}+{std[4]:.4f}; aupr {avg[5]:.4f}+{std[5]:.4f}; precision {avg[6]:.4f}+{std[6]:.4f}; recall {avg[7]:.4f}+{std[7]:.4f}\n")
 
         with open(f"./results/{args.dataset}/CSGDN/{args.period}_res.txt", "w") as f:
             for line in res.tolist():
@@ -265,7 +266,7 @@ if __name__ == "__main__":
             f.writelines("\n")
             f.writelines(res_str[-1])
 
-        break
+        # break
 
     for each in res_str:
         print(each)
