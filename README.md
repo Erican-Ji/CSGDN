@@ -58,3 +58,7 @@ We've set up a series of hyperparameters that can be tweaked
 |mask_ratio|--mask_ratio|0.4|
 |predictor|--predictor|2|
 |tau|--tau|0.05|
+
+## References
+
+The code in the project `srwr` is from <https://github.com/jinhongjung/srwr>
